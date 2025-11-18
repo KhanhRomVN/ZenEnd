@@ -21,12 +21,6 @@ class DebugRequestMiddleware(BaseHTTPMiddleware):
                     # 🆕 LOG: Hiển thị prompt từ Cline
                     messages = body_json.get("messages", [])
                     if messages:
-                        print(f"\n{'='*60}")
-                        print(f"[Middleware] 📨 CLINE REQUEST")
-                        print(f"{'='*60}")
-                        print(f"Model: {body_json.get('model', 'N/A')}")
-                        print(f"Total messages: {len(messages)}")
-                        print(f"\n--- MESSAGES ---")
                         for idx, msg in enumerate(messages):
                             role = msg.get("role", "unknown")
                             content = msg.get("content", "")
@@ -52,10 +46,6 @@ class DebugRequestMiddleware(BaseHTTPMiddleware):
                                     content_preview = content[:200] + "..."
                                 else:
                                     content_preview = content
-                            
-                            print(f"\n[{idx+1}] Role: {role}")
-                            print(f"Content: {content_preview}")
-                        print(f"\n{'='*60}\n")
                     
                 except Exception as e:
                     print(f"[Middleware]   - Parse error: {e}")

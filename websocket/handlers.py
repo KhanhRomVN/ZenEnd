@@ -3,7 +3,7 @@ WebSocket message handlers - Single connection version
 """
 import json
 import time
-import asyncio  # 🔧 THÊM: Import asyncio
+import asyncio
 from websockets.server import WebSocketServerProtocol
 import websockets
 
@@ -20,10 +20,9 @@ async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_m
                 try:
                     await websocket.ping()
                     await asyncio.sleep(30)
-                except Exception as e:
+                except Exception:
                     break
         
-        # Start ping task
         ping_task = asyncio.create_task(send_ping())
         
         async for message in websocket:
@@ -31,16 +30,15 @@ async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_m
                 data = json.loads(message)
                 await handle_websocket_message(data, port_manager)
             except json.JSONDecodeError:
-                print(f"[WS:{port_manager.port}] ❌ Invalid JSON: {message}")
-            except Exception as e:
-                print(f"[WS:{portManager.port}] ❌ Error handling message: {e}")
+                pass
+            except Exception:
+                pass
                 
-    except websockets.exceptions.ConnectionClosed as e:
-        print(f"[WS:{port_manager.port}] 🔌 ZenTab disconnected: {e.code} - {e.reason}")
-    except Exception as e:
-        print(f"[WS:{port_manager.port}] ❌ Unexpected error: {e}")
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    except Exception:
+        pass
     finally:
-        # Cancel ping task
         if ping_task:
             ping_task.cancel()
             try:
@@ -58,7 +56,7 @@ async def handle_websocket_message(data: dict, port_manager):
     if msg_type in VALIDATE_TIMESTAMP_TYPES:
         message_timestamp = data.get("timestamp", 0)
         current_time = time.time()
-        if message_timestamp > 0 and current_time - message_timestamp > 30:  # 30 seconds threshold
+        if message_timestamp > 0 and current_time - message_timestamp > 30:
             return
     
     if msg_type == "getAvailableTabs":
@@ -73,8 +71,8 @@ async def handle_websocket_message(data: dict, port_manager):
         
         try:
             await port_manager.websocket.send(json.dumps(request_msg))
-        except Exception as e:
-            print(f"[WS:{port_manager.port}] ❌ Failed to forward getAvailableTabs: {e}")
+        except Exception:
+            pass
     
     elif msg_type == "availableTabs":
         request_id = data.get("requestId")
@@ -85,7 +83,6 @@ async def handle_websocket_message(data: dict, port_manager):
         return
         
     elif msg_type == "promptResponse":
-        # ZenTab trả response từ DeepSeek
         request_id = data.get("requestId")
         success = data.get("success", False)
         tab_id = data.get("tabId")
@@ -102,35 +99,25 @@ async def handle_websocket_message(data: dict, port_manager):
         if expected_tab_id != tab_id:
             return
         
-        # Lấy tab state từ temp_tab_states
         tab_state = port_manager.get_temp_tab_state(tab_id)
         if not tab_state:
             port_manager.resolve_response(request_id, {"error": "Tab not found"})
             return
         
-        # Xử lý lỗi
         if not success:
             error_msg = data.get("error", "Unknown error")            
-            # Cleanup tab state tạm thời
             port_manager.cleanup_temp_tab_state(tab_id)
-            
-            # Resolve error
             port_manager.resolve_response(request_id, {"error": error_msg})
             return
         
         response_text = data.get("response", "")
         
-        # Parse response
         parsed_response = parse_deepseek_response(response_text)
         
-        # Cleanup tab state tạm thời
         port_manager.cleanup_temp_tab_state(tab_id)
-        
-        # Resolve response
         port_manager.resolve_response(request_id, parsed_response)
         
     elif msg_type == "promptResponse":
-        # ZenTab trả response từ DeepSeek
         request_id = data.get("requestId")
         success = data.get("success", False)
         tab_id = data.get("tabId")
@@ -147,37 +134,27 @@ async def handle_websocket_message(data: dict, port_manager):
         if expected_tab_id != tab_id:
             return
         
-        # Lấy tab state từ global pool
         tab_state = port_manager.global_tab_pool.get(tab_id)
         if not tab_state:
             port_manager.resolve_response(request_id, {"error": "Tab not found"})
             return
         
-        # Xử lý lỗi
         if not success:
             error_msg = data.get("error", "Unknown error")
             
-            # Đánh dấu tab error (hoặc xóa nếu không tồn tại)
             if error_type in ["SEND_FAILED", "VALIDATION_FAILED"]:
                 tab_state.mark_not_found()
             else:
                 tab_state.mark_error()
             
-            # Resolve error
             port_manager.resolve_response(request_id, {"error": error_msg})
             await port_manager.broadcast_status_update()
             return
         
         response_text = data.get("response", "")
         
-        # Parse response
         parsed_response = parse_deepseek_response(response_text)
         
-        # Đánh dấu tab rảnh
         tab_state.mark_free()
-        
-        # Resolve response
         port_manager.resolve_response(request_id, parsed_response)
-        
-        # Broadcast status update
         await port_manager.broadcast_status_update()

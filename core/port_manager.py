@@ -179,15 +179,15 @@ class PortManager:
         except Exception as e:
             print(f"[PortManager] ❌ Failed to cleanup wsMessages: {e}")
 
-    async def request_fresh_tabs(self, timeout: float = 5.0) -> Optional[list]:
+    async def request_fresh_tabs(self, timeout: float = 5.0) -> list:
         if not self.websocket:
-            return None
+            return []
         
         try:
             if self.websocket.closed:
-                return None
+                return []
         except Exception as e:
-            return None
+            return []
 
         # Tạo request ID duy nhất
         request_id = f"tabs_req_{uuid.uuid4().hex[:8]}"
@@ -209,9 +209,9 @@ class PortManager:
             return response.get('tabs', [])
             
         except asyncio.TimeoutError:
-            return None
+            return []
         except Exception as e:
-            return None
+            return []
         finally:
             self.response_futures.pop(request_id, None)
 

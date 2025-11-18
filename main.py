@@ -14,6 +14,7 @@ from config.settings import WS_PORT, HTTP_PORT, HTTP_HOST, API_KEY
 from core import PortManager
 from api.routes import setup_routes
 from websocket import start_websocket_server
+from api.response_logger import ResponseLoggerMiddleware
 
 port_manager = PortManager()
 
@@ -32,6 +33,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.add_middleware(ResponseLoggerMiddleware)
+
 from api.middleware import DebugRequestMiddleware
 app.add_middleware(DebugRequestMiddleware)
 
@@ -46,6 +49,21 @@ async def validation_exception_handler(request, exc):
         content={
             "detail": errors,
             "message": "Validation failed - check request format"
+        }
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc):
+    import traceback
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "message": str(exc),
+                "type": "internal_server_error",
+                "code": "internal_error"
+            }
         }
     )
 
