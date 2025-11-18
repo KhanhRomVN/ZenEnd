@@ -743,11 +743,7 @@ def _count_tokens(text: str) -> int:
 
 
 def is_fake_mode_enabled() -> bool:
-    """
-    Kiểm tra có bật fake mode không
-    """
-    return True  # Hiện tại đang bật fake mode
-
+    return False
 
 # Các hàm tiện ích để tạo response cụ thể
 def get_response_for_testing(stream: bool = False) -> dict:

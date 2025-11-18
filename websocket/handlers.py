@@ -7,7 +7,6 @@ import asyncio
 from websockets.server import WebSocketServerProtocol
 import websockets
 
-from core.response_parser import parse_deepseek_response
 from models import TabState
 
 async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_manager):
@@ -51,28 +50,23 @@ async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_m
 
 async def handle_websocket_message(data: dict, port_manager):
     msg_type = data.get("type")
-    VALIDATE_TIMESTAMP_TYPES = ["getAvailableTabs", "focusedTabsUpdate"]
+    VALIDATE_TIMESTAMP_TYPES = ["getAvailableTabs", "focusedTabsUpdate", "promptResponse"]
     
     if msg_type in VALIDATE_TIMESTAMP_TYPES:
         message_timestamp = data.get("timestamp", 0)
-        current_time = time.time()
-        if message_timestamp > 0 and current_time - message_timestamp > 30:
-            return
+        if message_timestamp > 0:
+            message_timestamp_seconds = message_timestamp / 1000.0
+            current_time = time.time()
+            message_age = current_time - message_timestamp_seconds
+            
+            if message_age > 60:
+                return
+            
+            if message_age < -5:
+                return
     
     if msg_type == "getAvailableTabs":
         return
-        request_id = data.get("requestId")
-        
-        request_msg = {
-            "type": "getAvailableTabs",
-            "requestId": request_id,
-            "timestamp": time.time()
-        }
-        
-        try:
-            await port_manager.websocket.send(json.dumps(request_msg))
-        except Exception:
-            pass
     
     elif msg_type == "availableTabs":
         request_id = data.get("requestId")
@@ -87,74 +81,167 @@ async def handle_websocket_message(data: dict, port_manager):
         success = data.get("success", False)
         tab_id = data.get("tabId")
         error_type = data.get("errorType", "")
+        response_text = data.get("response", "")
+        message_timestamp = data.get("timestamp", 0)
+        
+        message_timestamp_seconds = message_timestamp / 1000.0 if message_timestamp > 0 else 0
+        message_age = time.time() - message_timestamp_seconds if message_timestamp > 0 else 0
+        message_key = f"{message_timestamp}_{request_id}"
+        
+        message_timestamp_seconds = message_timestamp / 1000.0 if message_timestamp > 0 else 0
+        message_age = time.time() - message_timestamp_seconds if message_timestamp > 0 else 0
+        
+        in_response_futures = request_id in port_manager.response_futures
+        in_progress = port_manager.is_request_in_progress(request_id)
+        already_processed = port_manager.is_request_processed(request_id)
+        message_too_old = message_age > 30.0
+        in_request_to_tab = request_id in port_manager.request_to_tab
+        expected_tab_id = port_manager.request_to_tab.get(request_id) if in_request_to_tab else None
+        temp_tab_exists = expected_tab_id in port_manager.temp_tab_states if expected_tab_id else False
+        already_forwarded = message_key in port_manager.forwarded_messages
+        
+        future_done = False
+        if in_response_futures:
+            future = port_manager.response_futures.get(request_id)
+            future_done = future.done() if future else False
+        
+        should_process = (
+            in_response_futures and 
+            not in_progress and 
+            not already_processed and 
+            not message_too_old and
+            not already_forwarded and
+            not future_done
+        )
+        
+        if not should_process:
+            return
+        
+        port_manager.mark_request_in_progress(request_id)
+        
+        current_time = time.time()
+        port_manager.forwarded_messages[message_key] = current_time
         
         if not request_id or tab_id is None:
+            port_manager.mark_request_completed(request_id)
             return
         
         if request_id not in port_manager.request_to_tab:
-            return
+            expected_tab_id = None
+        else:
+            expected_tab_id = port_manager.request_to_tab[request_id]
         
-        expected_tab_id = port_manager.request_to_tab[request_id]
-        
-        if expected_tab_id != tab_id:
+        if expected_tab_id is not None and expected_tab_id != tab_id:
+            port_manager.mark_request_completed(request_id)
             return
         
         tab_state = port_manager.get_temp_tab_state(tab_id)
-        if not tab_state:
-            port_manager.resolve_response(request_id, {"error": "Tab not found"})
-            return
-        
-        if not success:
-            error_msg = data.get("error", "Unknown error")            
-            port_manager.cleanup_temp_tab_state(tab_id)
-            port_manager.resolve_response(request_id, {"error": error_msg})
-            return
-        
-        response_text = data.get("response", "")
-        
-        parsed_response = parse_deepseek_response(response_text)
-        
-        port_manager.cleanup_temp_tab_state(tab_id)
-        port_manager.resolve_response(request_id, parsed_response)
-        
-    elif msg_type == "promptResponse":
-        request_id = data.get("requestId")
-        success = data.get("success", False)
-        tab_id = data.get("tabId")
-        error_type = data.get("errorType", "")
-        
-        if not request_id or tab_id is None:
-            return
-        
-        if request_id not in port_manager.request_to_tab:
-            return
-        
-        expected_tab_id = port_manager.request_to_tab[request_id]
-        
-        if expected_tab_id != tab_id:
-            return
-        
-        tab_state = port_manager.global_tab_pool.get(tab_id)
-        if not tab_state:
-            port_manager.resolve_response(request_id, {"error": "Tab not found"})
-            return
+        if not tab_state and expected_tab_id is not None:
+            pass
         
         if not success:
             error_msg = data.get("error", "Unknown error")
-            
-            if error_type in ["SEND_FAILED", "VALIDATION_FAILED"]:
-                tab_state.mark_not_found()
-            else:
-                tab_state.mark_error()
-            
+            if tab_state:
+                port_manager.cleanup_temp_tab_state(tab_id)
             port_manager.resolve_response(request_id, {"error": error_msg})
-            await port_manager.broadcast_status_update()
+            port_manager.mark_request_processed(request_id)
+            port_manager.mark_request_completed(request_id)
             return
         
         response_text = data.get("response", "")
         
-        parsed_response = parse_deepseek_response(response_text)
+        if isinstance(response_text, bytes):
+            try:
+                response_text = response_text.decode('utf-8')
+            except Exception:
+                pass
         
-        tab_state.mark_free()
-        port_manager.resolve_response(request_id, parsed_response)
-        await port_manager.broadcast_status_update()
+        try:
+            if isinstance(response_text, dict):
+                response_data = response_text
+            elif not response_text:
+                raise ValueError("Empty response received")
+            elif isinstance(response_text, str):
+                if response_text.startswith('"') and response_text.endswith('"'):
+                    try:
+                        first_decode = json.loads(response_text)
+                        
+                        if isinstance(first_decode, str):
+                            response_data = json.loads(first_decode)
+                        else:
+                            response_data = first_decode
+                    except json.JSONDecodeError:
+                        response_data = json.loads(response_text)
+                else:
+                    response_data = json.loads(response_text)
+            else:
+                response_data = json.loads(str(response_text))
+            
+            response_data = _ensure_openai_format(response_data, request_id)
+            
+        except (json.JSONDecodeError, TypeError):
+            from core.response_parser import parse_deepseek_response
+            response_data = parse_deepseek_response(response_text)
+        
+        if request_id not in port_manager.response_futures:
+            port_manager.mark_request_completed(request_id)
+            return
+        
+        port_manager.resolve_response(request_id, response_data)
+        
+        port_manager.mark_request_processed(request_id)
+        port_manager.mark_request_completed(request_id)
+        
+        asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
+        asyncio.create_task(port_manager.schedule_temp_tab_cleanup(tab_id, delay=15.0))
+
+def _ensure_openai_format(response_data: dict, request_id: str) -> dict:
+    if all(key in response_data for key in ['id', 'object', 'created', 'model', 'choices']):
+        if response_data.get('object') == 'chat.completion.chunk':
+            choices = response_data.get('choices', [])
+            if choices and len(choices) > 0:
+                choice = choices[0]
+                if 'delta' in choice:
+                    response_data['object'] = 'chat.completion'
+                    choice['message'] = {
+                        'role': choice['delta'].get('role', 'assistant'),
+                        'content': choice['delta'].get('content', '')
+                    }
+                    del choice['delta']
+        
+        return response_data
+    
+    content = ""
+    if 'choices' in response_data and len(response_data['choices']) > 0:
+        choice = response_data['choices'][0]
+        if 'message' in choice and 'content' in choice['message']:
+            content = choice['message']['content']
+        elif 'delta' in choice and 'content' in choice['delta']:
+            content = choice['delta']['content']
+    
+    import time
+    import uuid
+    
+    openai_response = {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "deepseek-chat",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content
+            },
+            "finish_reason": "stop",
+            "logprobs": None
+        }],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        },
+        "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
+    }
+    
+    return openai_response

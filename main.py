@@ -14,7 +14,6 @@ from config.settings import WS_PORT, HTTP_PORT, HTTP_HOST, API_KEY
 from core import PortManager
 from api.routes import setup_routes
 from websocket import start_websocket_server
-from api.response_logger import ResponseLoggerMiddleware
 
 port_manager = PortManager()
 
@@ -32,8 +31,6 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
-
-app.add_middleware(ResponseLoggerMiddleware)
 
 from api.middleware import DebugRequestMiddleware
 app.add_middleware(DebugRequestMiddleware)

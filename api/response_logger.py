@@ -24,13 +24,21 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/v1/chat/completions":
             response = await call_next(request)
             
-            # 🔧 FIX: Clone response body WITHOUT consuming original
+            # 🔧 FIX: Xử lý cả JSONResponse và StreamingResponse
             body_bytes = b""
-            chunks = []
             
-            async for chunk in response.body_iterator:
-                chunks.append(chunk)
-                body_bytes += chunk
+            # Kiểm tra nếu response có body_iterator
+            if hasattr(response, 'body_iterator'):
+                chunks = []
+                async for chunk in response.body_iterator:
+                    chunks.append(chunk)
+                    body_bytes += chunk
+            # Nếu là JSONResponse thông thường (có body)
+            elif hasattr(response, 'body'):
+                body_bytes = response.body
+                chunks = [body_bytes]
+            else:
+                return response
             
             # 🔧 ENHANCED LOGGING: Log COMPLETE response
             try:
@@ -45,7 +53,8 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
                     tool_calls = message.get('tool_calls')
                     
                     if tool_calls:
-                        args = tool.get('function', {}).get('arguments', '')
+                        for tool in tool_calls:
+                            args = tool.get('function', {}).get('arguments', '')
                 
                 # Log usage
                 usage = body_json.get('usage', {})
@@ -90,17 +99,27 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
             except Exception as e:
                 print(f"[ResponseLogger] ❌ Error parsing response: {e}")
             
-            # 🔧 CRITICAL: Return NEW response with ORIGINAL body
-            async def new_body_iterator():
-                for chunk in chunks:
-                    yield chunk
+            # 🔧 CRITICAL: Return response with ORIGINAL content type and body
+            # Nếu là streaming response
+            if hasattr(response, 'body_iterator'):
+                async def new_body_iterator():
+                    for chunk in chunks:
+                        yield chunk
 
-            return Response(
-                content=body_bytes,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=response.media_type
-            )
+                return Response(
+                    content=body_bytes,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=response.media_type
+                )
+            # Nếu là JSONResponse thông thường
+            else:
+                return Response(
+                    content=body_bytes,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=response.media_type or "application/json"
+                )
         
         # For other routes, just proceed normally
         return await call_next(request)

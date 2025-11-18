@@ -7,13 +7,92 @@ import time
 import uuid
 
 def parse_deepseek_response(response_text: str) -> dict:
-    """
-    Parse response từ DeepSeek (XML format) sang OpenAI format
-    """
+    if response_text and isinstance(response_text, str):
+        if response_text.startswith('"') and response_text.endswith('"'):
+            try:
+                first_decode = json.loads(response_text)
+                
+                if isinstance(first_decode, str):
+                    second_decode = json.loads(first_decode)
+                    
+                    if isinstance(second_decode, dict) and all(key in second_decode for key in ['id', 'object', 'created', 'model', 'choices']):
+                        if second_decode.get('object') == 'chat.completion.chunk':
+                            second_decode = _convert_chunk_to_completion(second_decode)
+                        return second_decode
+                else:
+                    response_text = json.dumps(first_decode)
+            except json.JSONDecodeError:
+                pass
+        
+        try:
+            parsed = json.loads(response_text)
+            
+            if isinstance(parsed, dict):
+                if all(key in parsed for key in ['id', 'object', 'created', 'model', 'choices']):
+                    if parsed.get('object') == 'chat.completion.chunk':
+                        parsed = _convert_chunk_to_completion(parsed)
+                    return parsed
+        except json.JSONDecodeError:
+            pass
+    
     if not response_text or response_text.strip() == "":
         return _create_fallback_response("The model returned an empty response. Please try again.")
     
     cleaned_text = response_text.strip()
+    
+    try:
+        parsed_json = json.loads(cleaned_text, strict=False)
+        
+        if isinstance(parsed_json, dict):
+            required_keys = ['id', 'object', 'created', 'model', 'choices']
+            has_required = all(key in parsed_json for key in required_keys)
+            
+            if has_required:
+                if parsed_json.get('object') == 'chat.completion.chunk':
+                    choices = parsed_json.get('choices', [])
+                    if choices and 'delta' in choices[0]:
+                        delta = choices[0]['delta']
+                        choices[0]['message'] = {
+                            'role': delta.get('role', 'assistant'),
+                            'content': delta.get('content', '')
+                        }
+                        del choices[0]['delta']
+                        parsed_json['object'] = 'chat.completion'
+                
+                return parsed_json
+    except json.JSONDecodeError:
+        try:
+            import re
+            
+            def fix_unescaped_quotes(match):
+                field_name = match.group(1)
+                content = match.group(2)
+                fixed_content = content.replace('"', '\\"')
+                return f'"{field_name}": "{fixed_content}"'
+            
+            fixed_text = re.sub(
+                r'"(content)":\s*"([^"]*(?:"[^"]*)*)"',
+                lambda m: f'"{m.group(1)}": "{m.group(2).replace(chr(34), chr(92) + chr(34))}"',
+                cleaned_text
+            )
+            
+            parsed_json = json.loads(fixed_text, strict=False)
+            
+            if isinstance(parsed_json, dict) and all(key in parsed_json for key in ['id', 'object', 'created', 'model', 'choices']):
+                if parsed_json.get('object') == 'chat.completion.chunk':
+                    choices = parsed_json.get('choices', [])
+                    if choices and 'delta' in choices[0]:
+                        delta = choices[0]['delta']
+                        choices[0]['message'] = {
+                            'role': delta.get('role', 'assistant'),
+                            'content': delta.get('content', '')
+                        }
+                        del choices[0]['delta']
+                        parsed_json['object'] = 'chat.completion'
+                
+                return parsed_json
+        except Exception:
+            pass
     
     prefixes_to_remove = ["xmlCopy", "xml", "Copy"]
     for prefix in prefixes_to_remove:
@@ -23,6 +102,15 @@ def parse_deepseek_response(response_text: str) -> dict:
     if cleaned_text.startswith("```"):
         cleaned_text = re.sub(r'^```(?:xml)?\s*', '', cleaned_text)
         cleaned_text = re.sub(r'\s*```$', '', cleaned_text)
+    
+    if cleaned_text.startswith('"') and cleaned_text.endswith('"'):
+        try:
+            fixed_text = cleaned_text[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+            parsed_inner = json.loads(fixed_text)
+            if isinstance(parsed_inner, dict) and all(key in parsed_inner for key in ['id', 'object', 'created', 'model', 'choices']):
+                return parsed_inner
+        except Exception:
+            pass
     
     from core.tool_parser import parse_xml_tools
     
@@ -55,110 +143,13 @@ def parse_deepseek_response(response_text: str) -> dict:
         del response_data["choices"][0]["message"]["tool_calls"]
     
     return response_data
-    
-    prefixes_to_remove = [
-        "jsonCopyDownload",
-        "jsonCopy",
-        "json",
-        "Copy",
-        "Download"
-    ]
-    
-    for prefix in prefixes_to_remove:
-        if cleaned_text.startswith(prefix):
-            cleaned_text = cleaned_text[len(prefix):].strip()
-    
-    if cleaned_text.startswith("```"):
-        cleaned_text = re.sub(r'^```(?:json)?\s*', '', cleaned_text)
-        cleaned_text = re.sub(r'\s*```$', '', cleaned_text)
-    
-    try:
-        data = json.loads(cleaned_text, strict=False)
-        
-        if "id" in data and "choices" in data:
-            converted = convert_deepseek_to_openai(data)
-            return converted
-                
-    except json.JSONDecodeError:
-        try:
-            fixed_text = cleaned_text
-            
-            def fix_nested_quotes(match):
-                args_content = match.group(1)
-                if args_content.startswith('{') and args_content.endswith('}'):
-                    fixed = args_content.replace('"', '\\"')
-                    return f'"arguments": "{fixed}"'
-                return match.group(0)
-            
-            fixed_text = re.sub(r'"arguments":\s*"([^"]*\{[^}]*\}[^"]*)"', fix_nested_quotes, fixed_text)
-            
-            data = json.loads(fixed_text, strict=False)
-            
-            if "id" in data and "choices" in data:
-                converted = convert_deepseek_to_openai(data)
-                return converted
-                
-        except Exception:
-            pass
-        
-        brace_count = 0
-        start_idx = cleaned_text.find('{')
-        
-        if start_idx == -1:
-            return _create_fallback_response(response_text)
-        
-        end_idx = start_idx
-        in_string = False
-        escape_next = False
-        
-        for i in range(start_idx, len(cleaned_text)):
-            char = cleaned_text[i]
-            
-            if char == '"' and not escape_next:
-                in_string = not in_string
-            elif char == '\\':
-                escape_next = not escape_next
-                continue
-            
-            if not in_string:
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        end_idx = i + 1
-                        break
-            
-            escape_next = False
-        
-        if brace_count != 0:
-            return _create_fallback_response(response_text)
-        
-        json_str = cleaned_text[start_idx:end_idx]
-        
-        try:
-            data = json.loads(json_str, strict=False)
-            converted = convert_deepseek_to_openai(data)
-            return converted
-        except Exception:
-            return _create_fallback_response(response_text)
-    
-    return _create_fallback_response(response_text)
-
 
 def convert_deepseek_to_openai(deepseek_data: dict) -> dict:
-    """
-    Convert từ DeepSeek web format sang OpenAI API format
-    """
     result = deepseek_data.copy()
     result["model"] = "deepseek-chat"
     return result
 
-
 def _create_fallback_response(response_text: str) -> dict:
-    """
-    Tạo fallback response khi không parse được JSON
-    """
     actual_content = response_text[:2000]
     
     try:
@@ -193,3 +184,19 @@ def _create_fallback_response(response_text: str) -> dict:
     }
     
     return fallback
+
+def _convert_chunk_to_completion(chunk_data: dict) -> dict:
+    completion_data = chunk_data.copy()
+    completion_data['object'] = 'chat.completion'
+    
+    choices = completion_data.get('choices', [])
+    for choice in choices:
+        if 'delta' in choice:
+            delta = choice['delta']
+            choice['message'] = {
+                'role': delta.get('role', 'assistant'),
+                'content': delta.get('content', '')
+            }
+            del choice['delta']
+    
+    return completion_data

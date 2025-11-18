@@ -9,6 +9,9 @@ from .handlers import handle_websocket_connection
 
 
 async def start_websocket_server(port: int, port_manager):
+    # 🆕 Khởi động cleanup loop khi event loop đã sẵn sàng
+    await port_manager.start_cleanup_loop()
+    
     retry_count = 0
     max_retries = 3
     
