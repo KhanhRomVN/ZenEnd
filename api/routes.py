@@ -121,7 +121,22 @@ def setup_routes(app, port_manager):
         if not user_messages:
             raise HTTPException(status_code=400, detail="No user message found in request")
 
-        prompt = user_messages[-1].content
+        # Xử lý content có thể là string hoặc array
+        raw_content = user_messages[-1].content
+        
+        if isinstance(raw_content, list):
+            # Extract text từ array (Cline format)
+            text_parts = []
+            for item in raw_content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "image":
+                        text_parts.append("[IMAGE - Not supported]")
+            
+            prompt = "\n\n".join(text_parts)
+        else:
+            prompt = raw_content
 
 
         # 5. Đánh dấu tab BUSY và track request (tạo TabState tạm thời)
