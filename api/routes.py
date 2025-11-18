@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Header
 
 from config.settings import REQUEST_TIMEOUT
-from models import ChatCompletionRequest, TabStatus
+from models import ChatCompletionRequest, TabStatus, TabState
 from .dependencies import verify_api_key
 
 
@@ -19,68 +19,7 @@ router = APIRouter()
 
 def setup_routes(app, port_manager):
     """Setup routes với port_manager dependency"""
-    
-    @router.get("/health")
-    async def health_check():
-        """Health check endpoint chi tiết"""
-        detailed_status = port_manager.get_detailed_status()
-        return {
-            "status": "healthy",
-            "ports": {
-                "total": len(port_manager.ports),
-                "connected": port_manager.get_connected_count(),
-                "busy_tabs": port_manager.get_busy_count(),
-                "free_tabs": port_manager.get_total_free_tabs(),
-            },
-            "detailed_status": detailed_status
-        }
-
-    @router.get("/v1/status/detailed")
-    async def get_detailed_status(api_key: str = Depends(verify_api_key)):
-        """Get detailed real-time status of all ports and tabs"""
-        # Build detailed status
-        ports_detail = []
-        
-        for port, port_state in sorted(port_manager.ports.items()):
-            if not port_state.websocket:
-                ports_detail.append({
-                    "port": port,
-                    "connected": False,
-                    "tabs": []
-                })
-                continue
-            
-            tabs_detail = []
-            for tab_id, tab_state in sorted(port_state.tabs.items()):
-                tabs_detail.append({
-                    "tab_id": tab_id,
-                    "container_name": tab_state.container_name,
-                    "title": tab_state.title,
-                    "status": tab_state.status.value,
-                    "can_accept_request": tab_state.can_accept_request(),
-                    "error_count": tab_state.error_count,
-                    "last_used_seconds_ago": time.time() - tab_state.last_used if tab_state.last_used > 0 else None,
-                    "current_request_id": tab_state.current_request_id
-                })
-            
-            ports_detail.append({
-                "port": port,
-                "connected": True,
-                "tabs": tabs_detail,
-                "summary": port_state.get_tab_status_summary()
-            })
-        
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "summary": {
-                "connected_ports": port_manager.get_connected_count(),
-                "total_ports": len(port_manager.ports),
-                "total_tabs": sum(len(ps.tabs) for ps in port_manager.ports.values()),
-                "free_tabs": port_manager.get_total_free_tabs(),
-                "busy_tabs": port_manager.get_busy_count()
-            },
-            "ports": ports_detail
-        }
+    print(f"[Routes] 🔧 Setting up routes with PortManager: {id(port_manager)}")
 
     @router.post("/v1/chat/completions")
     async def chat_completions(
@@ -98,108 +37,105 @@ def setup_routes(app, port_manager):
         if request.model != "deepseek-web":
             raise HTTPException(status_code=400, detail=f"Model '{request.model}' not supported. Only 'deepseek-web' is available.")
         
-        # 🆕 LOG: Chi tiết về tất cả ports và tabs
+        # LOG: Chi tiết về WebSocket và tabs
         print("\n[API] 🔍 SYSTEM STATUS CHECK:")
-        print(f"├─ Connected WebSocket ports: {port_manager.get_connected_count()}/{len(port_manager.ports)}")
-        print(f"├─ Total tabs available: {sum(len(ps.tabs) for ps in port_manager.ports.values())}")
-        print(f"├─ Free tabs: {port_manager.get_total_free_tabs()}")
-        print(f"└─ Busy tabs: {port_manager.get_busy_count()}")
+        print(f"[API]   - Calling port_manager.get_connection_status()...")
         
-        print("\n[API] 📊 DETAILED PORT STATUS:")
-        for port, port_state in sorted(port_manager.ports.items()):
-            if not port_state.websocket:
-                print(f"  Port {port}: ❌ DISCONNECTED")
-                continue
-                
-            status_summary = port_state.get_tab_status_summary()
-            print(f"  Port {port}: ✅ CONNECTED")
-            print(f"    ├─ Total tabs: {status_summary['total_tabs']}")
-            print(f"    ├─ Free: {status_summary['free_tabs']}")
-            print(f"    ├─ Busy: {status_summary['busy_tabs']}")
-            print(f"    ├─ Error: {status_summary['error_tabs']}")
-            print(f"    └─ Not Found: {status_summary['not_found_tabs']}")
+        # 🆕 DEBUG: Chi tiết connection state
+        conn_status = port_manager.get_connection_status()
+        
+        print(f"[API]   - Got connection status: {conn_status}")
+        print(f"├─ WebSocket object exists: {conn_status['websocket_connected']}")
+        print(f"├─ WebSocket open: {conn_status['websocket_open']}")
+        print(f"├─ Port: {conn_status['port']}")
+        print(f"├─ Total tabs available: {conn_status['total_tabs']}")
+        print(f"├─ Free tabs: {conn_status['free_tabs']}")
+        print(f"└─ Busy tabs: {conn_status['busy_tabs']}")
+        
+        # 🆕 LOG: Chi tiết từng tab trong global pool
+        print(f"\n[API] 📋 GLOBAL TAB POOL ({len(port_manager.global_tab_pool)} tabs):")
+        for tab_id, tab_state in sorted(port_manager.global_tab_pool.items()):
+            status_icon = {
+                TabStatus.FREE: "🟢",
+                TabStatus.BUSY: "🔵",
+                TabStatus.ERROR: "🔴",
+                TabStatus.NOT_FOUND: "⚫"
+            }.get(tab_state.status, "⚪")
             
-            # 🆕 LOG: Chi tiết từng tab trong port
-            if status_summary['total_tabs'] > 0:
-                print(f"    📋 Tabs detail:")
-                for tab_id, tab_state in sorted(port_state.tabs.items()):
-                    status_icon = {
-                        TabStatus.FREE: "🟢",
-                        TabStatus.BUSY: "🔵",
-                        TabStatus.ERROR: "🔴",
-                        TabStatus.NOT_FOUND: "⚫"
-                    }.get(tab_state.status, "⚪")
-                    
-                    # Tính thời gian từ lần sử dụng cuối
-                    time_since_use = time.time() - tab_state.last_used if tab_state.last_used > 0 else float('inf')
-                    time_str = f"{time_since_use:.1f}s ago" if time_since_use != float('inf') else "never used"
-                    
-                    # Check xem tab có thể nhận request không
-                    can_accept = "✓ Ready" if tab_state.can_accept_request() else "✗ Not ready"
-                    
-                    print(f"      {status_icon} Tab {tab_id} ({tab_state.container_name})")
-                    print(f"         Status: {tab_state.status.value} | Last used: {time_str}")
-                    print(f"         {can_accept} | Errors: {tab_state.error_count}")
-                    if tab_state.current_request_id:
-                        print(f"         Current request: {tab_state.current_request_id}")
-        
-        # 2. Lấy tab rảnh với cơ chế thông minh
-        print("\n[API] 🎯 SELECTING FREE TAB...")
-        tab_info = await port_manager.get_free_tab()
-        
-        if not tab_info:
-            busy_count = port_manager.get_busy_count()
-            free_count = port_manager.get_total_free_tabs()
-            connected_count = port_manager.get_connected_count()
+            # Tính thời gian từ lần sử dụng cuối
+            time_since_use = time.time() - tab_state.last_used if tab_state.last_used > 0 else float('inf')
+            time_str = f"{time_since_use:.1f}s ago" if time_since_use != float('inf') else "never used"
             
-            print("\n[API] ❌ NO FREE TAB AVAILABLE!")
-            print(f"  Reason: connected={connected_count}, free={free_count}, busy={busy_count}")
-            print("="*80 + "\n")
+            # Check xem tab có thể nhận request không
+            can_accept = "✓ Ready" if tab_state.can_accept_request() else "✗ Not ready"
             
-            if connected_count == 0:
-                raise HTTPException(
-                    status_code=503,
-                    detail="No ZenTab connections available. Please open ZenTab extension first."
-                )
-            elif free_count == 0:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"No free tabs available. {busy_count} tabs are busy. Please try again in a few seconds."
-                )
-            else:
-                # Có tab free nhưng không đủ điều kiện (chưa đủ thời gian chờ)
-                raise HTTPException(
-                    status_code=503,
-                    detail="Tabs are cooling down after previous requests. Please try again in 2-3 seconds."
-                )
+            print(f"  {status_icon} Tab {tab_id} ({tab_state.container_name})")
+            print(f"     Status: {tab_state.status.value} | Last used: {time_str}")
+            print(f"     {can_accept} | Errors: {tab_state.error_count}")
+            if tab_state.current_request_id:
+                print(f"     Current request: {tab_state.current_request_id}")
         
-        port, tab_id, port_state, tab_state = tab_info
-        
-        # 🆕 LOG: Thông tin tab được chọn
-        print(f"\n[API] ✅ SELECTED TAB:")
-        print(f"  ├─ Port: {port}")
-        print(f"  ├─ Tab ID: {tab_id}")
-        print(f"  ├─ Container: {tab_state.container_name}")
-        print(f"  ├─ Title: {tab_state.title}")
-        print(f"  ├─ Status: {tab_state.status.value}")
-        print(f"  ├─ Error count: {tab_state.error_count}")
-        print(f"  └─ Last used: {time.time() - tab_state.last_used:.1f}s ago")
-        
-        # 3. Tạo request ID và gửi prompt
+        # 2. Yêu cầu danh sách tabs mới từ ZenTab
+        print("\n[API] 🎯 REQUESTING FRESH TABS FROM ZENTAB...")
+
+        # 🆕 FIX: Luôn yêu cầu danh sách tabs mới từ ZenTab
+        available_tabs = await port_manager.request_fresh_tabs()
+        if not available_tabs:
+            print("[API] ❌ No tabs available from ZenTab")
+            raise HTTPException(
+                status_code=503,
+                detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
+            )
+
+        print(f"[API] ✅ Received {len(available_tabs)} tabs from ZenTab")
+
+        # 3. Chọn một tab free từ danh sách mới
+        print("\n[API] 🔍 SELECTING FREE TAB FROM FRESH LIST...")
+
+        # Lọc tabs free (status = FREE và có thể nhận request)
+        free_tabs = [
+            tab for tab in available_tabs 
+            if tab.get('status') == 'free' and tab.get('canAccept', True)
+        ]
+
+        if not free_tabs:
+            print("[API] ❌ No free tabs available in fresh list")
+            raise HTTPException(
+                status_code=503,
+                detail="No free tabs available. Please try again in a few seconds."
+            )
+
+        # Chọn tab đầu tiên từ danh sách free
+        selected_tab = free_tabs[0]
+        tab_id = selected_tab['tabId']
+        container_name = selected_tab.get('containerName', 'Unknown')
+
+        print(f"[API] ✅ Selected tab {tab_id} ({container_name})")
+
+        # 4. Tạo request ID và gửi prompt
         request_id = f"api-{uuid.uuid4().hex[:16]}"
-        
+
         # Extract user message (lấy message cuối cùng từ user)
         user_messages = [msg for msg in request.messages if msg.role == "user"]
         if not user_messages:
             raise HTTPException(status_code=400, detail="No user message found in request")
-        
+
         prompt = user_messages[-1].content
-        
-        print(f"[API] 🎯 Selected tab {tab_id} ({tab_state.container_name}) on port {port}")
-        
-        # 4. Gửi request tới ZenTab qua WebSocket
+
+        print(f"[API] 🎯 Using fresh tab {tab_id} ({container_name})")
+
+        # 5. Đánh dấu tab BUSY và track request (tạo TabState tạm thời)
+        tab_state = TabState(
+            tab_id=tab_id,
+            container_name=container_name,
+            title=selected_tab.get('title', ''),
+            url=selected_tab.get('url', '')
+        )
         tab_state.mark_busy(request_id)
-        port_manager.request_to_tab[request_id] = (port, tab_id)
+        port_manager.request_to_tab[request_id] = tab_id
+
+        # Lưu tab state tạm thời cho request này
+        port_manager.temp_tab_states[tab_id] = tab_state
         
         ws_message = {
             "type": "sendPrompt",
@@ -209,14 +145,14 @@ def setup_routes(app, port_manager):
         }
         
         try:
-            await port_state.websocket.send(json.dumps(ws_message))
+            await port_manager.websocket.send(json.dumps(ws_message))
             print(f"\n[API] 📤 PROMPT SENT:")
             print(f"  ├─ Request ID: {request_id}")
-            print(f"  ├─ Target: Port {port}, Tab {tab_id}")
+            print(f"  ├─ Target: Tab {tab_id}")
             print(f"  └─ Prompt length: {len(prompt)} chars")
             print(f"\n[API] ⏳ Waiting for response (timeout: {REQUEST_TIMEOUT}s)...")
         except Exception as e:
-            # Gửi thất bại: đánh dấu tab rảnh lại
+            # Gửi thất bại: đánh dấu tab free
             tab_state.mark_free()
             port_manager.request_to_tab.pop(request_id, None)
             print(f"\n[API] ❌ FAILED TO SEND PROMPT: {str(e)}")
@@ -245,13 +181,11 @@ def setup_routes(app, port_manager):
             # Đã xử lý timeout trong wait_for_response
             raise
         except Exception as e:
-            # Lỗi khác: đánh dấu tab rảnh
-            if request_id in port_manager.request_to_tab:
-                port, tab_id = port_manager.request_to_tab[request_id]
-                if port in port_manager.ports and tab_id in port_manager.ports[port].tabs:
-                    port_manager.ports[port].tabs[tab_id].mark_free()
-                port_manager.request_to_tab.pop(request_id, None)
+            port_manager.cleanup_temp_tab_state(tab_id)
+            port_manager.request_to_tab.pop(request_id, None)
             raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            port_manager.cleanup_temp_tab_state(tab_id)
     
     # Register router
     app.include_router(router)

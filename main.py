@@ -9,16 +9,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import uvicorn
 
-from config.settings import WS_PORTS, HTTP_PORT, HTTP_HOST, API_KEY
+from config.settings import WS_PORT, HTTP_PORT, HTTP_HOST, API_KEY
 from core import PortManager
 from api.routes import setup_routes
 from websocket import start_websocket_server
 
 
 # ============================================================================
-# GLOBAL INSTANCES
+# GLOBAL INSTANCES (Singleton)
 # ============================================================================
+print("[Main] 🚀 Creating PortManager instance...")
 port_manager = PortManager()
+print(f"[Main] ✅ PortManager created: {id(port_manager)}")
 
 
 # ============================================================================
@@ -27,17 +29,13 @@ port_manager = PortManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown events"""
-    # Startup: Khởi động WebSocket servers
-    ws_tasks = []
-    for port in WS_PORTS:
-        task = asyncio.create_task(start_websocket_server(port, port_manager))
-        ws_tasks.append(task)
+    # Startup: Khởi động WebSocket server duy nhất
+    ws_task = asyncio.create_task(start_websocket_server(WS_PORT, port_manager))
     
     yield
     
-    # Shutdown: Cancel WebSocket tasks
-    for task in ws_tasks:
-        task.cancel()
+    # Shutdown: Cancel WebSocket task
+    ws_task.cancel()
 
 
 # ============================================================================
