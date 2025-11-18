@@ -85,7 +85,10 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
                 }
                 
                 for issue, detected in issues.items():
-                    status = "❌ DETECTED" if detected else "✅ OK"    
+                    status = "❌ DETECTED" if detected else "✅ OK"
+            
+            except Exception as e:
+                print(f"[ResponseLogger] ❌ Error parsing response: {e}")
             
             # 🔧 CRITICAL: Return NEW response with ORIGINAL body
             async def new_body_iterator():

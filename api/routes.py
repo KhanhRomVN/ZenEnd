@@ -74,12 +74,35 @@ def setup_routes(app, port_manager):
         from api.fake_response import is_fake_mode_enabled, create_fake_response
         
         if is_fake_mode_enabled():
-            fake_response = create_fake_response(request.model)
-            from fastapi.responses import JSONResponse
-            return JSONResponse(content=fake_response, status_code=200)
-
-        if request.stream:
-            request.stream = False
+            fake_response = create_fake_response(
+                model=request.model, 
+                messages=request.messages,
+                stream=request.stream if hasattr(request, 'stream') else False
+            )
+            
+            # 🆕 LOG: Fake Response
+            print("\n" + "="*80)
+            print("[API] 📤 FAKE RESPONSE TO CLINE:")
+            print("="*80)
+            print(json.dumps(fake_response, indent=2, ensure_ascii=False))
+            print("="*80 + "\n")
+            
+            # Xử lý streaming response
+            if request.stream and fake_response.get("object") == "chat.completion.chunk":
+                # Trả về streaming response
+                from fastapi.responses import StreamingResponse
+                async def generate():
+                    yield f"data: {json.dumps(fake_response)}\n\n"
+                    yield "data: [DONE]\n\n"
+                
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/plain"
+                )
+            else:
+                # Trả về non-streaming response
+                from fastapi.responses import JSONResponse
+                return JSONResponse(content=fake_response, status_code=200)
         
         SUPPORTED_MODELS = ["deepseek-chat", "deepseek-coder", "deepseek-coder-v2"]
         if request.model not in SUPPORTED_MODELS:
@@ -206,6 +229,13 @@ def setup_routes(app, port_manager):
 
             from fastapi.responses import JSONResponse
             
+            # 🆕 LOG: API Response trước khi gửi tới Cline
+            print("\n" + "="*80)
+            print("[API] 📤 FINAL RESPONSE TO CLINE:")
+            print("="*80)
+            print(json.dumps(validated_response, indent=2, ensure_ascii=False))
+            print("="*80 + "\n")
+            
             return JSONResponse(
                 content=validated_response,
                 status_code=200,
@@ -240,6 +270,13 @@ def setup_routes(app, port_manager):
                     },
                     "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
                 }
+                
+                # 🆕 LOG: Fallback response
+                print("\n" + "="*80)
+                print("[API] ⚠️ FALLBACK RESPONSE TO CLINE:")
+                print("="*80)
+                print(json.dumps(fallback_response, indent=2, ensure_ascii=False))
+                print("="*80 + "\n")
                 
                 from fastapi.responses import JSONResponse
                 return JSONResponse(content=fallback_response, status_code=200)

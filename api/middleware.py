@@ -18,13 +18,20 @@ class DebugRequestMiddleware(BaseHTTPMiddleware):
                 try:
                     body_json = json.loads(body.decode('utf-8'))
                     
+                    # 🆕 LOG TOÀN BỘ reqBody
+                    print("\n" + "="*80)
+                    print("[Middleware] 📥 INCOMING REQUEST BODY:")
+                    print("="*80)
+                    print(json.dumps(body_json, indent=2, ensure_ascii=False))
+                    print("="*80 + "\n")
+                    
                     # 🆕 LOG: Hiển thị prompt từ Cline
                     messages = body_json.get("messages", [])
                     if messages:
                         for idx, msg in enumerate(messages):
                             role = msg.get("role", "unknown")
                             content = msg.get("content", "")
-                            
+                                
                             # Xử lý content dạng array hoặc string
                             if isinstance(content, list):
                                 # Extract text từ array
