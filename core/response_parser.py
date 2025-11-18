@@ -34,7 +34,7 @@ def parse_deepseek_response(response_text: str) -> dict:
         "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": "deepseek-web",
+        "model": "deepseek-chat",
         "choices": [{
             "index": 0,
             "message": {
@@ -57,5 +57,5 @@ def convert_deepseek_to_openai(deepseek_data: dict) -> dict:
     """
     # DeepSeek format thường giống OpenAI, chỉ cần đổi model name
     result = deepseek_data.copy()
-    result["model"] = "deepseek-web"
+    result["model"] = "deepseek-chat"
     return result

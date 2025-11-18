@@ -18,23 +18,18 @@ class PortManager:
     _lock = None  # 🆕 Class-level lock for thread-safety
     
     def __new__(cls):
-        """Singleton pattern - chỉ tạo 1 instance duy nhất"""
         if cls._instance is None:
-            print("[PortManager] 🏗️ Creating new PortManager instance (Singleton)")
             cls._instance = super().__new__(cls)
             cls._lock = asyncio.Lock()
             cls._instance._initialized = False
-        else:
-            print("[PortManager] ♻️ Returning existing PortManager instance (Singleton)")
+        
         return cls._instance
     
     def __init__(self):
         # Chỉ khởi tạo một lần duy nhất
         if self._initialized:
-            print("[PortManager] ⏩ Already initialized, skipping __init__")
             return
             
-        print("[PortManager] 🔧 Initializing PortManager attributes")
         self.websocket: Optional[object] = None
         self.port: int = WS_PORT
         
@@ -48,22 +43,14 @@ class PortManager:
         self.connection_time = 0
         
         self._initialized = True
-        print("[PortManager] ✅ PortManager initialized successfully")
     
-    def get_connection_status(self) -> dict:
-        """Debug: Lấy trạng thái chi tiết của connection"""
-        print(f"[PortManager] 🔍 get_connection_status called")
-        print(f"[PortManager]   - self.websocket: {self.websocket}")
-        print(f"[PortManager]   - self.websocket is None: {self.websocket is None}")
-        
+    def get_connection_status(self) -> dict:        
         websocket_open = False
         if self.websocket:
             try:
                 websocket_open = self.websocket.open
-                print(f"[PortManager]   - self.websocket.open: {websocket_open}")
             except Exception as e:
                 websocket_open = False
-                print(f"[PortManager]   - Error checking websocket.open: {e}")
         else:
             print(f"[PortManager]   - self.websocket is None, cannot check open state")
                 
@@ -77,24 +64,12 @@ class PortManager:
             "connection_age": time.time() - self.connection_time if self.connection_time > 0 else 0
         }
         
-        print(f"[PortManager] 📊 Connection status: {status}")
         return status
     
-    # 🆕 THÊM: Method để cập nhật websocket một cách an toàn
     async def update_websocket(self, websocket):
-        """Cập nhật websocket connection một cách an toàn"""
-        print(f"[PortManager] 🔧 update_websocket called")
-        print(f"[PortManager]   - Before: self.websocket is None = {self.websocket is None}")
-        print(f"[PortManager]   - New websocket object: {websocket}")
-        print(f"[PortManager]   - New websocket is open: {websocket.open}")
-        
         async with self.lock:
             self.websocket = websocket
             self.connection_time = time.time()
-            print(f"[PortManager] ✅ WebSocket updated successfully")
-            print(f"[PortManager]   - After: self.websocket is None = {self.websocket is None}")
-            print(f"[PortManager]   - After: self.websocket is open = {self.websocket.open}")
-            print(f"[PortManager]   - Connection time: {self.connection_time}")
     
     async def broadcast_status_update(self):
         """Broadcast status update tới WebSocket client"""
@@ -107,35 +82,25 @@ class PortManager:
                 }
                 await self.websocket.send(json.dumps(status_data))
             except Exception as e:
-                print(f"[PortManager] Failed to broadcast status: {e}")
+                pass
         
     async def get_free_tab(self) -> Optional[Tuple[int, TabState]]:
-        """
-        Tìm 1 tab FREE trong global pool
-        Trả về: (tab_id, tab_state)
-        """
         async with self.lock:
-            # 🆕 FIX: Kiểm tra tabs có sẵn TRƯỚC khi check WebSocket
-            # Cho phép sử dụng tabs đã được cache từ connection trước
             if len(self.global_tab_pool) == 0:
-                print("[PortManager] ❌ No tabs in global pool")
                 return None
             
-            # Lọc tabs FREE trong global pool
             free_tabs = [
                 (tid, ts) for tid, ts in self.global_tab_pool.items()
                 if ts.can_accept_request()
             ]
             
             if not free_tabs:
-                print("[PortManager] ❌ No free tabs available in global pool")
                 return None
             
             # Sort tabs: ưu tiên tab ít lỗi và lâu chưa dùng
             free_tabs.sort(key=lambda x: (x[1].error_count, x[1].last_used))
             tab_id, tab_state = free_tabs[0]
             
-            print(f"[PortManager] ✅ Selected: Tab {tab_id} ({tab_state.container_name})")
             return (tab_id, tab_state)
     
     def get_busy_count(self) -> int:
@@ -204,41 +169,24 @@ class PortManager:
                 "timestamp": time.time(),
                 "force": True
             }
-            
-            print(f"[PortManager] 🧹 Starting cleanup process...")
-            
+                        
             if self.websocket:
                 try:
                     await self.websocket.send(json.dumps(cleanup_message))
-                    print(f"[PortManager] 📤 Sent cleanup command to WebSocket")
                 except Exception as send_error:
                     print(f"[PortManager] ⚠️ Failed to send cleanup: {send_error}")
-            else:
-                print("[PortManager] ⚠️ WARNING: WebSocket not connected for cleanup")
             
         except Exception as e:
             print(f"[PortManager] ❌ Failed to cleanup wsMessages: {e}")
-        # 🆕 THÊM: Method yêu cầu danh sách tabs mới từ ZenTab
+
     async def request_fresh_tabs(self, timeout: float = 5.0) -> Optional[list]:
-        """Yêu cầu và chờ danh sách tabs mới từ ZenTab"""
-        print(f"[PortManager] 🎯 request_fresh_tabs called")
-        print(f"[PortManager]   - self.websocket: {self.websocket}")
-        print(f"[PortManager]   - self.websocket is None: {self.websocket is None}")
-        
         if not self.websocket:
-            print("[PortManager] ❌ No WebSocket connection to request tabs")
-            print("[PortManager]   - This means update_websocket was not called, or websocket was cleared")
             return None
         
-        print(f"[PortManager] ✅ WebSocket exists, checking if open...")
-
-        # 🔧 FIX: Check WebSocket is still open
         try:
             if self.websocket.closed:
-                print("[PortManager] ❌ WebSocket connection is closed")
                 return None
         except Exception as e:
-            print(f"[PortManager] ❌ Cannot check WebSocket state: {e}")
             return None
 
         # Tạo request ID duy nhất
@@ -255,47 +203,29 @@ class PortManager:
                 "urgent": True
             }
             
-            print(f"[PortManager] 🔍 Attempting to send getAvailableTabs via WebSocket")
-            print(f"[PortManager]   - WebSocket state: open={not self.websocket.closed}")
-            print(f"[PortManager]   - Request ID: {request_id}")
-            print(f"[PortManager]   - Message: {request_msg}")
-            
             await self.websocket.send(json.dumps(request_msg))
-            print(f"[PortManager] ✅ Message sent successfully to extension")
-            print(f"[PortManager] 📡 Sent fresh tabs request: {request_id}")
 
-            # Chờ response với timeout
             response = await asyncio.wait_for(future, timeout=timeout)
-            print(f"[PortManager] ✅ Received fresh tabs: {len(response.get('tabs', []))} tabs")
             return response.get('tabs', [])
             
         except asyncio.TimeoutError:
-            print(f"[PortManager] ❌ Timeout waiting for fresh tabs")
             return None
         except Exception as e:
-            print(f"[PortManager] ❌ Error requesting fresh tabs: {e}")
             return None
         finally:
             self.response_futures.pop(request_id, None)
 
-    # 🆕 THÊM: Xử lý response availableTabs
     def handle_available_tabs_response(self, request_id: str, tabs: list):
-        """Xử lý response danh sách tabs từ ZenTab"""
         future = self.response_futures.get(request_id)
         if future and not future.done():
             future.set_result({"tabs": tabs})
 
-    # 🆕 SỬA: Method get_free_tab không dùng global pool nữa
     async def get_free_tab(self) -> Optional[Tuple[int, TabState]]:
-        """KHÔNG DÙNG NỮA - Sẽ luôn trả về None để buộc dùng request_fresh_tabs"""
         return None
 
-    # 🆕 THÊM: Lấy tab state tạm thời
     def get_temp_tab_state(self, tab_id: int) -> Optional[TabState]:
-        """Lấy tab state tạm thời cho request hiện tại"""
         return self.temp_tab_states.get(tab_id)
 
-    # 🆕 THÊM: Cleanup tab state tạm thời
     def cleanup_temp_tab_state(self, tab_id: int):
         """Dọn dẹp tab state tạm thời"""
         self.temp_tab_states.pop(tab_id, None)
