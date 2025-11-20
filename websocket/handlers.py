@@ -169,32 +169,68 @@ async def handle_websocket_message(data: dict, port_manager):
         
         response_text = data.get("response", "")
         
+        print(f"[WebSocket] 📨 RAW RESPONSE from ZenTab - requestId: {request_id}")
+        print(f"[WebSocket] 📊 Response type: {type(response_text)}")
+        print(f"[WebSocket] 📝 Response length: {len(str(response_text))}")
+        print(f"[WebSocket] 📄 RAW RESPONSE CONTENT (no truncate):")
+        print(response_text)
+        print(f"[WebSocket] ═══════════════════════════════════════")
+        
         if isinstance(response_text, bytes):
             try:
                 response_text = response_text.decode('utf-8')
-            except Exception:
+                print(f"[WebSocket] 🔄 Decoded bytes to string")
+            except Exception as decode_error:
+                print(f"[WebSocket] ❌ Failed to decode bytes: {decode_error}")
                 pass
         
         try:
             if isinstance(response_text, dict):
                 response_data = response_text
+                print(f"[WebSocket] ✅ Response is already a dict, using directly")
             elif not response_text:
                 raise ValueError("Empty response received")
             elif isinstance(response_text, str):
+                print(f"[WebSocket] 🔄 Parsing string response...")
                 if response_text.startswith('"') and response_text.endswith('"'):
                     try:
+                        print(f"[WebSocket] 🔍 Detected double-encoded JSON, attempting first decode...")
                         first_decode = json.loads(response_text)
                         
                         if isinstance(first_decode, str):
+                            print(f"[WebSocket] 🔍 First decode returned string, attempting second decode...")
                             response_data = json.loads(first_decode)
+                            print(f"[WebSocket] ✅ Successfully double-decoded JSON")
                         else:
                             response_data = first_decode
-                    except json.JSONDecodeError:
+                            print(f"[WebSocket] ✅ First decode returned object, using it")
+                    except json.JSONDecodeError as double_decode_error:
+                        print(f"[WebSocket] ⚠️ Double decode failed: {double_decode_error}, trying single decode...")
                         response_data = json.loads(response_text)
                 else:
+                    print(f"[WebSocket] 🔍 Attempting single JSON decode...")
                     response_data = json.loads(response_text)
+                    print(f"[WebSocket] ✅ Successfully decoded JSON")
             else:
                 response_data = json.loads(str(response_text))
+            
+            print(f"[WebSocket] 📊 PARSED RESPONSE STRUCTURE (before ensure_openai_format):")
+            print(f"[WebSocket]   - Type: {type(response_data)}")
+            print(f"[WebSocket]   - Keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'N/A'}")
+            if isinstance(response_data, dict):
+                print(f"[WebSocket]   - Has 'id': {bool(response_data.get('id'))}")
+                print(f"[WebSocket]   - Has 'object': {bool(response_data.get('object'))}")
+                print(f"[WebSocket]   - Has 'choices': {bool(response_data.get('choices'))}")
+                if response_data.get('choices'):
+                    print(f"[WebSocket]   - Choices count: {len(response_data['choices'])}")
+                    if len(response_data['choices']) > 0:
+                        first_choice = response_data['choices'][0]
+                        print(f"[WebSocket]   - First choice keys: {list(first_choice.keys())}")
+                        print(f"[WebSocket]   - Has 'message': {bool(first_choice.get('message'))}")
+                        print(f"[WebSocket]   - Has 'delta': {bool(first_choice.get('delta'))}")
+            print(f"[WebSocket] 📝 FULL PARSED RESPONSE (no truncate):")
+            print(json.dumps(response_data, indent=2, ensure_ascii=False))
+            print(f"[WebSocket] ═══════════════════════════════════════")
             
             response_data = _ensure_openai_format(response_data, request_id)
             
@@ -205,6 +241,26 @@ async def handle_websocket_message(data: dict, port_manager):
         if request_id not in port_manager.response_futures:
             port_manager.mark_request_completed(request_id)
             return
+        
+        print(f"[WebSocket] 🎯 FINAL RESPONSE (after ensure_openai_format) - requestId: {request_id}")
+        print(f"[WebSocket] 📊 Final response type: {type(response_data)}")
+        print(f"[WebSocket] 📊 Final response keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'N/A'}")
+        if isinstance(response_data, dict):
+            print(f"[WebSocket]   - object: {response_data.get('object')}")
+            print(f"[WebSocket]   - model: {response_data.get('model')}")
+            if response_data.get('choices'):
+                print(f"[WebSocket]   - choices count: {len(response_data['choices'])}")
+                first_choice = response_data['choices'][0]
+                print(f"[WebSocket]   - First choice finish_reason: {first_choice.get('finish_reason')}")
+                if first_choice.get('message'):
+                    msg = first_choice['message']
+                    print(f"[WebSocket]   - Message role: {msg.get('role')}")
+                    print(f"[WebSocket]   - Message content type: {type(msg.get('content'))}")
+                    print(f"[WebSocket]   - Message content length: {len(str(msg.get('content', '')))}")
+                    print(f"[WebSocket]   - Has tool_calls: {bool(msg.get('tool_calls'))}")
+        print(f"[WebSocket] 📝 COMPLETE FINAL RESPONSE (no truncate):")
+        print(json.dumps(response_data, indent=2, ensure_ascii=False))
+        print(f"[WebSocket] ═══════════════════════════════════════")
         
         port_manager.resolve_response(request_id, response_data)
         

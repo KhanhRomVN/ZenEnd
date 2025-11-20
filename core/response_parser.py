@@ -7,9 +7,17 @@ import time
 import uuid
 
 def parse_deepseek_response(response_text: str) -> dict:
+    print(f"[ResponseParser] 📥 INPUT to parse_deepseek_response()")
+    print(f"[ResponseParser] 📊 Input type: {type(response_text)}")
+    print(f"[ResponseParser] 📊 Input length: {len(str(response_text))}")
+    print(f"[ResponseParser] 📝 RAW INPUT (no truncate):")
+    print(response_text)
+    print(f"[ResponseParser] ═══════════════════════════════════════")
+    
     if response_text and isinstance(response_text, str):
         if response_text.startswith('"') and response_text.endswith('"'):
             try:
+                print(f"[ResponseParser] 🔍 Detected double-encoded JSON string")
                 first_decode = json.loads(response_text)
                 
                 if isinstance(first_decode, str):
@@ -141,6 +149,13 @@ def parse_deepseek_response(response_text: str) -> dict:
     
     if response_data["choices"][0]["message"]["tool_calls"] is None:
         del response_data["choices"][0]["message"]["tool_calls"]
+    
+    print(f"[ResponseParser] 📤 OUTPUT from parse_deepseek_response()")
+    print(f"[ResponseParser] 📊 Output type: {type(response_data)}")
+    print(f"[ResponseParser] 📊 Output keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'N/A'}")
+    print(f"[ResponseParser] 📝 COMPLETE OUTPUT (no truncate):")
+    print(json.dumps(response_data, indent=2, ensure_ascii=False))
+    print(f"[ResponseParser] ═══════════════════════════════════════")
     
     return response_data
 

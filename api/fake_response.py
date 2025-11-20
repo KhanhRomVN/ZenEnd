@@ -405,7 +405,7 @@ The user is interacting with the ZenEnd backend project. I should provide a help
 def _create_streaming_response(model: str, content: str) -> dict:
     """
     Tạo streaming response đơn giản - chỉ 1 chunk với toàn bộ content
-    Đây là format mà Cline thực sự mong đợi
+    🆕 NOTE: Trả về chunk format cho streaming, sẽ được convert ở routes.py nếu cần
     """
     response_id = f"chatcmpl-{uuid.uuid4().hex[:16]}"
     created_time = int(time.time())
@@ -432,6 +432,11 @@ def _create_streaming_response(model: str, content: str) -> dict:
         },
         "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
     }
+    
+    print(f"[FakeResponse] 📊 Created streaming chunk response:")
+    print(f"[FakeResponse]   - object: {chunk['object']}")
+    print(f"[FakeResponse]   - has delta: {bool(chunk['choices'][0].get('delta'))}")
+    print(f"[FakeResponse]   - content length: {len(content)}")
     
     return chunk
 
@@ -743,7 +748,7 @@ def _count_tokens(text: str) -> int:
 
 
 def is_fake_mode_enabled() -> bool:
-    return False
+    return True
 
 # Các hàm tiện ích để tạo response cụ thể
 def get_response_for_testing(stream: bool = False) -> dict:
