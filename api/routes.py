@@ -216,13 +216,17 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     # 🆕 Rebuild: Fake dùng 'message' + 'tool_calls', Real dùng 'delta' (không tool_calls)
     if is_fake:
         # Fake response: dùng 'message' + 'tool_calls'
+        message_obj = {
+            'role': role,
+            'content': content
+        }
+        # Only add tool_calls if it's valid (not None and not empty)
+        if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
+            message_obj['tool_calls'] = tool_calls
+        
         choice_data = {
             'index': choice_index,
-            'message': {
-                'role': role,
-                'content': content,
-                'tool_calls': tool_calls
-            },
+            'message': message_obj,
             'finish_reason': finish_reason,
             'logprobs': logprobs
         }
@@ -341,6 +345,7 @@ def setup_routes(app, port_manager):
         api_key: str = Depends(verify_api_key)
     ):
         from api.fake_response import is_fake_mode_enabled, create_fake_response
+        from fastapi.responses import StreamingResponse
         
         if is_fake_mode_enabled():
             fake_response = create_fake_response(
@@ -351,16 +356,25 @@ def setup_routes(app, port_manager):
             
             fake_request_id = uuid.uuid4().hex[:16]
             
-            # 🆕 LOG: Raw fake response từ create_fake_response
             print(f"\n[RAW FAKE RESPONSE - PRE-VALIDATION]")
             print(f"{'='*80}")
             print(json.dumps(fake_response, indent=2, ensure_ascii=False))
             print(f"{'='*80}\n")
             
-            # Xử lý streaming response
             if request.stream and fake_response.get("object") == "chat.completion.chunk":
-                # Trả về streaming response
                 from fastapi.responses import StreamingResponse
+                
+                print(f"\n[STREAMING DEBUG]")
+                print(f"  object: {fake_response.get('object')}")
+                print(f"  choices count: {len(fake_response.get('choices', []))}")
+                if fake_response.get('choices'):
+                    choice = fake_response['choices'][0]
+                    print(f"  delta keys: {list(choice.get('delta', {}).keys())}")
+                    delta_content = choice.get('delta', {}).get('content')
+                    print(f"  delta.content type: {type(delta_content)}")
+                    print(f"  delta.content length: {len(delta_content) if delta_content else 0}")
+                    print(f"  finish_reason: {choice.get('finish_reason')}")
+                
                 async def generate():
                     yield f"data: {json.dumps(fake_response)}\n\n"
                     yield "data: [DONE]\n\n"
@@ -369,8 +383,8 @@ def setup_routes(app, port_manager):
                     generate(),
                     media_type="text/event-stream"
                 )
+                
             else:
-                # 🆕 FIX: Luôn pass qua validation để có full logging
                 try:
                     fake_response = _validate_and_fix_response(
                         fake_response, 
@@ -379,7 +393,6 @@ def setup_routes(app, port_manager):
                     )
                 except Exception as e:
                     print(f"[ERROR] Failed to validate fake response: {e}")
-                    # Tạo fallback nếu validation fail
                     fake_response = {
                         "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
                         "object": "chat.completion",
@@ -402,7 +415,6 @@ def setup_routes(app, port_manager):
                         "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
                     }
                 
-                # 🆕 LOG: Final fake response sau khi validate
                 _log_final_response(fake_response, is_fake=True)
                 
                 return fake_response
@@ -416,14 +428,12 @@ def setup_routes(app, port_manager):
         
         conn_status = port_manager.get_connection_status()
         
-        # Kiểm tra WebSocket connection trước khi request tabs
         if not conn_status.get('websocket_connected') or not conn_status.get('websocket_open'):
             raise HTTPException(
                 status_code=503,
                 detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
             )
         
-        # Request danh sách tabs rảnh từ ZenTab với timeout 10s
         available_tabs = await port_manager.request_fresh_tabs(timeout=10.0)
         
         if not available_tabs or len(available_tabs) == 0:
@@ -432,7 +442,6 @@ def setup_routes(app, port_manager):
                 detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
             )
 
-        # ZenTab chỉ trả về 1 tab duy nhất, lấy tab đầu tiên
         selected_tab = available_tabs[0]
         tab_id = selected_tab.get('tabId')
         
@@ -442,7 +451,6 @@ def setup_routes(app, port_manager):
                 detail=f"Invalid tab ID received from ZenTab: {tab_id}"
             )
         
-        # Kiểm tra tab status
         tab_status = selected_tab.get('status', 'unknown')
         can_accept = selected_tab.get('canAccept', False)
         
@@ -505,13 +513,24 @@ def setup_routes(app, port_manager):
 
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=30.0))
             
-            # Final validation và fix response
             response = _validate_and_fix_response(response, request_id, is_fake=False)
             
-            # LOG: Final real response
             _log_final_response(response, is_fake=False)
             
-            return response
+            # 🆕 CRITICAL FIX: Wrap real response trong StreamingResponse
+            if response.get("object") == "chat.completion.chunk":
+                print(f"\n[REAL RESPONSE STREAMING] Wrapping response in StreamingResponse")
+                
+                async def generate_real():
+                    yield f"data: {json.dumps(response)}\n\n"
+                    yield "data: [DONE]\n\n"
+                
+                return StreamingResponse(
+                    generate_real(),
+                    media_type="text/event-stream"
+                )
+            else:
+                return response
             
         except HTTPException as he:
             port_manager.mark_request_processed(request_id)
@@ -543,7 +562,6 @@ def setup_routes(app, port_manager):
                     "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
                 }
                 
-                # 🆕 LOG: Fallback response
                 _log_final_response(fallback_response, is_fake=False)
                 
                 return fallback_response
