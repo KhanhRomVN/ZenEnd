@@ -84,7 +84,6 @@ def _contains_task_tag(messages: List[Any]) -> bool:
     
     return False
 
-
 def _contains_tool_use_pattern(messages: List[Any]) -> bool:
     """Kiểm tra nếu messages có chứa pattern sử dụng tool"""
     for msg in messages:
@@ -103,7 +102,6 @@ def _contains_tool_use_pattern(messages: List[Any]) -> bool:
             return True
     
     return False
-
 
 def _create_task_response_with_xml(model: str, messages: List[Any], stream: bool = False) -> dict:
     """
@@ -433,11 +431,6 @@ def _create_streaming_response(model: str, content: str) -> dict:
         "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
     }
     
-    print(f"[FakeResponse] 📊 Created streaming chunk response:")
-    print(f"[FakeResponse]   - object: {chunk['object']}")
-    print(f"[FakeResponse]   - has delta: {bool(chunk['choices'][0].get('delta'))}")
-    print(f"[FakeResponse]   - content length: {len(content)}")
-    
     return chunk
 
 def create_fake_response_with_multiple_tools(model: str = "deepseek-chat", stream: bool = False) -> dict:
@@ -748,7 +741,7 @@ def _count_tokens(text: str) -> int:
 
 
 def is_fake_mode_enabled() -> bool:
-    return True
+    return False
 
 # Các hàm tiện ích để tạo response cụ thể
 def get_response_for_testing(stream: bool = False) -> dict:
@@ -915,11 +908,7 @@ def _create_plan_mode_response(model: str, messages: List[Any], stream: bool = F
     """
     Tạo response cho PLAN MODE - không dùng XML tool calls
     """
-    plan_response = """I can see you're in PLAN MODE and you've sent a simple "hello" task. Since this is a straightforward greeting, I don't need extensive planning. I'm ready to help you with the ZenEnd backend project. 
-
-The project structure looks well-organized with API routes, WebSocket handlers, and core management components. I can assist with exploring the codebase, implementing features, or debugging issues.
-
-Would you like me to switch to ACT MODE to start working on specific tasks, or do you have a particular planning discussion in mind?"""
+    plan_response = "Hello! I can see you're working on ZenTab, which appears to be a browser extension project with WebSocket integration and a React-based sidebar interface. The codebase looks well-structured with background scripts, content scripts, and presentation components.\n\nSince we're in PLAN MODE, I'd like to understand what you'd like to work on:\n\n1. What specific task or feature would you like to focus on? (e.g., debugging, adding new functionality, improving existing code)\n\n2. Are there any particular files or components you're currently working with? I notice you have several files open including WebSocket managers and prompt controllers.\n\n3. What's your current goal? Are you building new features, fixing bugs, refactoring, or something else?\n\nOnce I understand your objectives, I can help create a detailed plan for approaching the work effectively."
 
     if stream:
         # Streaming response cho PLAN MODE

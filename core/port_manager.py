@@ -178,6 +178,7 @@ class PortManager:
                 future.set_result(response)
             except Exception:
                 pass
+    
     async def wait_for_response(self, request_id: str, timeout: float = 180.0) -> dict:
         """
         Đợi response từ ZenTab extension với timeout
@@ -257,22 +258,16 @@ class PortManager:
         Request danh sách tabs rảnh từ ZenTab extension
         Tăng timeout lên 10s để đảm bảo đủ thời gian cho ZenTab phản hồi
         """
-        print(f"[PortManager] request_fresh_tabs() called with timeout={timeout}s")
-        
         if not self.websocket:
-            print(f"[PortManager] ❌ No WebSocket connection available")
             return []
         
         try:
             if self.websocket.closed:
-                print(f"[PortManager] ❌ WebSocket connection is closed")
                 return []
-        except Exception as check_error:
-            print(f"[PortManager] ❌ Error checking WebSocket status: {check_error}")
+        except Exception:
             return []
 
         request_id = f"tabs_req_{uuid.uuid4().hex[:8]}"
-        print(f"[PortManager] Generated request_id: {request_id}")
         
         future = asyncio.Future()
         self.response_futures[request_id] = future
@@ -285,40 +280,29 @@ class PortManager:
                 "urgent": True
             }
             
-            print(f"[PortManager] Sending getAvailableTabs request to ZenTab: {request_msg}")
             await self.websocket.send(json.dumps(request_msg))
-            print(f"[PortManager] ✅ Request sent, waiting for response (timeout={timeout}s)...")
 
             # Đợi response từ ZenTab với timeout 10s
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
             
-            print(f"[PortManager] ✅ Received response with {len(tabs)} tabs")
             return tabs
             
         except asyncio.TimeoutError:
-            print(f"[PortManager] ❌ Timeout waiting for tabs response from ZenTab (waited {timeout}s)")
             return []
-        except Exception as e:
-            print(f"[PortManager] ❌ Error requesting tabs: {e}")
+        except Exception:
             return []
         finally:
             self.response_futures.pop(request_id, None)
-            print(f"[PortManager] Cleaned up request_id: {request_id}")
 
     def handle_available_tabs_response(self, request_id: str, tabs: list):
-        print(f"[PortManager] handle_available_tabs_response() called - request_id: {request_id}, tabs: {len(tabs)}")
-        
         future = self.response_futures.get(request_id)
         if not future:
-            print(f"[PortManager] ⚠️ No future found for request_id: {request_id}")
             return
         
         if future.done():
-            print(f"[PortManager] ⚠️ Future already done for request_id: {request_id}")
             return
         
-        print(f"[PortManager] ✅ Setting result for request_id: {request_id}")
         future.set_result({"tabs": tabs})
     
     async def schedule_request_cleanup(self, request_id: str, delay: float = 30.0):

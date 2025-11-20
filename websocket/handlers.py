@@ -5,7 +5,6 @@ from websockets.server import WebSocketServerProtocol
 import websockets
 
 async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_manager):
-    print(f"[WebSocket] New connection established from {websocket.remote_address}")
     await port_manager.update_websocket(websocket)
     ping_task = None
     
@@ -30,9 +29,9 @@ async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_m
                 pass
                 
     except websockets.exceptions.ConnectionClosed:
-        print(f"[WebSocket] Connection closed normally")
-    except Exception as e:
-        print(f"[WebSocket] ❌ Connection error: {e}")
+        pass
+    except Exception:
+        pass
     finally:
         if ping_task:
             ping_task.cancel()
@@ -68,35 +67,19 @@ async def handle_websocket_message(data: dict, port_manager):
         request_id = data.get("requestId")
         tabs = data.get("tabs", [])
         
-        print(f"[WebSocket] Received availableTabs response - request_id: {request_id}, tabs count: {len(tabs)}")
-        
-        # 🆕 CHECK: Kiểm tra xem future có tồn tại và chưa done không
+        # Check if future exists and not done
         if request_id not in port_manager.response_futures:
-            print(f"[WebSocket] ⚠️ No future found for request_id: {request_id}, ignoring duplicate response")
             return
         
         future = port_manager.response_futures.get(request_id)
         if future.done():
-            print(f"[WebSocket] ⚠️ Future already done for request_id: {request_id}, ignoring duplicate response")
             return
         
         # Validate tabs data structure
         if not isinstance(tabs, list):
-            print(f"[WebSocket] ⚠️ Invalid tabs data type: {type(tabs)}, converting to empty list")
             tabs = []
         
-        # Log tab details
-        if len(tabs) > 0:
-            for idx, tab in enumerate(tabs):
-                tab_id = tab.get('tabId', 'unknown')
-                status = tab.get('status', 'unknown')
-                can_accept = tab.get('canAccept', False)
-                print(f"[WebSocket]   Tab {idx}: tabId={tab_id}, status={status}, canAccept={can_accept}")
-        else:
-            print(f"[WebSocket] ⚠️ Received 0 tabs from ZenTab extension")
-        
         # Resolve future cho request này
-        print(f"[WebSocket] Resolving future for request_id: {request_id}")
         port_manager.handle_available_tabs_response(request_id, tabs)
     
     elif msg_type == "focusedTabsUpdate":
@@ -113,9 +96,6 @@ async def handle_websocket_message(data: dict, port_manager):
         message_timestamp_seconds = message_timestamp / 1000.0 if message_timestamp > 0 else 0
         message_age = time.time() - message_timestamp_seconds if message_timestamp > 0 else 0
         message_key = f"{message_timestamp}_{request_id}"
-        
-        message_timestamp_seconds = message_timestamp / 1000.0 if message_timestamp > 0 else 0
-        message_age = time.time() - message_timestamp_seconds if message_timestamp > 0 else 0
         
         in_response_futures = request_id in port_manager.response_futures
         in_progress = port_manager.is_request_in_progress(request_id)
@@ -169,70 +149,42 @@ async def handle_websocket_message(data: dict, port_manager):
         
         response_text = data.get("response", "")
         
-        print(f"[WebSocket] 📨 RAW RESPONSE from ZenTab - requestId: {request_id}")
-        print(f"[WebSocket] 📊 Response type: {type(response_text)}")
-        print(f"[WebSocket] 📝 Response length: {len(str(response_text))}")
-        print(f"[WebSocket] 📄 RAW RESPONSE CONTENT (no truncate):")
-        print(response_text)
-        print(f"[WebSocket] ═══════════════════════════════════════")
-        
         if isinstance(response_text, bytes):
             try:
                 response_text = response_text.decode('utf-8')
-                print(f"[WebSocket] 🔄 Decoded bytes to string")
-            except Exception as decode_error:
-                print(f"[WebSocket] ❌ Failed to decode bytes: {decode_error}")
+            except Exception:
                 pass
         
         try:
             if isinstance(response_text, dict):
                 response_data = response_text
-                print(f"[WebSocket] ✅ Response is already a dict, using directly")
             elif not response_text:
                 raise ValueError("Empty response received")
             elif isinstance(response_text, str):
-                print(f"[WebSocket] 🔄 Parsing string response...")
-                if response_text.startswith('"') and response_text.endswith('"'):
-                    try:
-                        print(f"[WebSocket] 🔍 Detected double-encoded JSON, attempting first decode...")
-                        first_decode = json.loads(response_text)
-                        
-                        if isinstance(first_decode, str):
-                            print(f"[WebSocket] 🔍 First decode returned string, attempting second decode...")
-                            response_data = json.loads(first_decode)
-                            print(f"[WebSocket] ✅ Successfully double-decoded JSON")
-                        else:
-                            response_data = first_decode
-                            print(f"[WebSocket] ✅ First decode returned object, using it")
-                    except json.JSONDecodeError as double_decode_error:
-                        print(f"[WebSocket] ⚠️ Double decode failed: {double_decode_error}, trying single decode...")
-                        response_data = json.loads(response_text)
-                else:
-                    print(f"[WebSocket] 🔍 Attempting single JSON decode...")
+                # 🆕 FIX: Parse JSON ONCE và decode escaped sequences
+                try:
+                    # Single parse - ZenTab đã stringify 1 lần
                     response_data = json.loads(response_text)
-                    print(f"[WebSocket] ✅ Successfully decoded JSON")
+                    
+                    # 🔥 CRITICAL: Decode escaped newlines trong content field
+                    if isinstance(response_data, dict) and 'choices' in response_data:
+                        for choice in response_data.get('choices', []):
+                            # Check cả message và delta
+                            for key in ['message', 'delta']:
+                                if key in choice and 'content' in choice[key]:
+                                    raw_content = choice[key]['content']
+                                    if isinstance(raw_content, str) and '\\n' in raw_content:
+                                        # Decode escaped sequences
+                                        decoded_content = raw_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+                                        choice[key]['content'] = decoded_content
+                                        print(f"[WebSocket] 🔧 Decoded escaped newlines in {key}.content")
+                    
+                except json.JSONDecodeError:
+                    # Fallback: nếu parse fail, dùng response_parser
+                    from core.response_parser import parse_deepseek_response
+                    response_data = parse_deepseek_response(response_text)
             else:
                 response_data = json.loads(str(response_text))
-            
-            print(f"[WebSocket] 📊 PARSED RESPONSE STRUCTURE (before ensure_openai_format):")
-            print(f"[WebSocket]   - Type: {type(response_data)}")
-            print(f"[WebSocket]   - Keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'N/A'}")
-            if isinstance(response_data, dict):
-                print(f"[WebSocket]   - Has 'id': {bool(response_data.get('id'))}")
-                print(f"[WebSocket]   - Has 'object': {bool(response_data.get('object'))}")
-                print(f"[WebSocket]   - Has 'choices': {bool(response_data.get('choices'))}")
-                if response_data.get('choices'):
-                    print(f"[WebSocket]   - Choices count: {len(response_data['choices'])}")
-                    if len(response_data['choices']) > 0:
-                        first_choice = response_data['choices'][0]
-                        print(f"[WebSocket]   - First choice keys: {list(first_choice.keys())}")
-                        print(f"[WebSocket]   - Has 'message': {bool(first_choice.get('message'))}")
-                        print(f"[WebSocket]   - Has 'delta': {bool(first_choice.get('delta'))}")
-            print(f"[WebSocket] 📝 FULL PARSED RESPONSE (no truncate):")
-            print(json.dumps(response_data, indent=2, ensure_ascii=False))
-            print(f"[WebSocket] ═══════════════════════════════════════")
-            
-            response_data = _ensure_openai_format(response_data, request_id)
             
         except (json.JSONDecodeError, TypeError):
             from core.response_parser import parse_deepseek_response
@@ -242,80 +194,9 @@ async def handle_websocket_message(data: dict, port_manager):
             port_manager.mark_request_completed(request_id)
             return
         
-        print(f"[WebSocket] 🎯 FINAL RESPONSE (after ensure_openai_format) - requestId: {request_id}")
-        print(f"[WebSocket] 📊 Final response type: {type(response_data)}")
-        print(f"[WebSocket] 📊 Final response keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'N/A'}")
-        if isinstance(response_data, dict):
-            print(f"[WebSocket]   - object: {response_data.get('object')}")
-            print(f"[WebSocket]   - model: {response_data.get('model')}")
-            if response_data.get('choices'):
-                print(f"[WebSocket]   - choices count: {len(response_data['choices'])}")
-                first_choice = response_data['choices'][0]
-                print(f"[WebSocket]   - First choice finish_reason: {first_choice.get('finish_reason')}")
-                if first_choice.get('message'):
-                    msg = first_choice['message']
-                    print(f"[WebSocket]   - Message role: {msg.get('role')}")
-                    print(f"[WebSocket]   - Message content type: {type(msg.get('content'))}")
-                    print(f"[WebSocket]   - Message content length: {len(str(msg.get('content', '')))}")
-                    print(f"[WebSocket]   - Has tool_calls: {bool(msg.get('tool_calls'))}")
-        print(f"[WebSocket] 📝 COMPLETE FINAL RESPONSE (no truncate):")
-        print(json.dumps(response_data, indent=2, ensure_ascii=False))
-        print(f"[WebSocket] ═══════════════════════════════════════")
-        
         port_manager.resolve_response(request_id, response_data)
         
         port_manager.mark_request_processed(request_id)
         port_manager.mark_request_completed(request_id)
         
         asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
-
-def _ensure_openai_format(response_data: dict, request_id: str) -> dict:
-    if all(key in response_data for key in ['id', 'object', 'created', 'model', 'choices']):
-        if response_data.get('object') == 'chat.completion.chunk':
-            choices = response_data.get('choices', [])
-            if choices and len(choices) > 0:
-                choice = choices[0]
-                if 'delta' in choice:
-                    response_data['object'] = 'chat.completion'
-                    choice['message'] = {
-                        'role': choice['delta'].get('role', 'assistant'),
-                        'content': choice['delta'].get('content', '')
-                    }
-                    del choice['delta']
-        
-        return response_data
-    
-    content = ""
-    if 'choices' in response_data and len(response_data['choices']) > 0:
-        choice = response_data['choices'][0]
-        if 'message' in choice and 'content' in choice['message']:
-            content = choice['message']['content']
-        elif 'delta' in choice and 'content' in choice['delta']:
-            content = choice['delta']['content']
-    
-    import time
-    import uuid
-    
-    openai_response = {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": "deepseek-chat",
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": content
-            },
-            "finish_reason": "stop",
-            "logprobs": None
-        }],
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-        },
-        "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
-    }
-    
-    return openai_response
