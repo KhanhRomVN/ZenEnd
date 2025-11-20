@@ -20,6 +20,9 @@ port_manager = PortManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown events"""
+    print(f"[Main] Starting ZenEnd Backend...")
+    print(f"[Main] HTTP API: http://{HTTP_HOST}:{HTTP_PORT}")
+    print(f"[Main] WebSocket: ws://localhost:{WS_PORT}")
     ws_task = asyncio.create_task(start_websocket_server(WS_PORT, port_manager))
     
     yield

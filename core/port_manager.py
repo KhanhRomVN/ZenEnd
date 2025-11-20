@@ -1,16 +1,10 @@
-"""
-Port Manager - Quản lý trạng thái tabs và WebSocket connection duy nhất
-"""
 import uuid
 import json
 import time
 import asyncio
 from typing import Dict, Optional, Tuple
-
 from fastapi import HTTPException
-
 from config.settings import WS_PORT
-from models import TabStatus, TabState
 
 
 class PortManager:
@@ -32,11 +26,8 @@ class PortManager:
         self.websocket: Optional[object] = None
         self.port: int = WS_PORT
         
-        self.global_tab_pool: Dict[int, TabState] = {}
-        
         self.response_futures: Dict[str, asyncio.Future] = {}
         self.request_to_tab: Dict[str, int] = {}
-        self.temp_tab_states: Dict[int, TabState] = {}
         self.processed_requests: Dict[str, float] = {}
         self.duplicate_count: Dict[str, int] = {}
         self.requests_in_progress: set[str] = set()
@@ -65,8 +56,6 @@ class PortManager:
             self.requests_in_progress.discard(request_id)
             
             if request_id in self.request_to_tab:
-                tab_id = self.request_to_tab[request_id]
-                self.cleanup_temp_tab_state(tab_id)
                 self.request_to_tab.pop(request_id, None)
 
     def mark_request_completed(self, request_id: str):
@@ -116,12 +105,15 @@ class PortManager:
         keys_to_remove = []
         
         for req_id, timestamp in self.processed_requests.items():
-            if current_time - timestamp > 300:
+            if current_time - timestamp > 60:
                 keys_to_remove.append(req_id)
         
         for req_id in keys_to_remove:
             self.processed_requests.pop(req_id, None)
             self.duplicate_count.pop(req_id, None)
+            
+            if req_id in self.message_processing_log:
+                self.message_processing_log.pop(req_id, None)
     
     async def cleanup_forwarded_messages(self):
         current_time = time.time()
@@ -155,9 +147,6 @@ class PortManager:
         status = {
             "websocket_connected": websocket_connected,
             "websocket_open": websocket_open,
-            "total_tabs": len(self.global_tab_pool),
-            "free_tabs": self.get_total_free_tabs(),
-            "busy_tabs": self.get_busy_count(),
             "port": self.port,
             "connection_age": time.time() - self.connection_time if self.connection_time > 0 else 0
         }
@@ -180,66 +169,6 @@ class PortManager:
                 await self.websocket.send(json.dumps(status_data))
             except Exception:
                 pass
-        
-    async def get_free_tab(self) -> Optional[Tuple[int, TabState]]:
-        async with self.lock:
-            if len(self.global_tab_pool) == 0:
-                return None
-            
-            free_tabs = [
-                (tid, ts) for tid, ts in self.global_tab_pool.items()
-                if ts.can_accept_request()
-            ]
-            
-            if not free_tabs:
-                return None
-            
-            free_tabs.sort(key=lambda x: (x[1].error_count, x[1].last_used))
-            tab_id, tab_state = free_tabs[0]
-            
-            return (tab_id, tab_state)
-    
-    def get_busy_count(self) -> int:
-        return sum(1 for ts in self.global_tab_pool.values() if ts.status == TabStatus.BUSY)
-    
-    def is_connected(self) -> bool:
-        return len(self.global_tab_pool) > 0
-    
-    def get_total_free_tabs(self) -> int:
-        return sum(1 for ts in self.global_tab_pool.values() if ts.can_accept_request())
-    
-    def get_detailed_status(self) -> dict:
-        tabs_status = []
-        for tab_id, tab_state in sorted(self.global_tab_pool.items()):
-            tabs_status.append({
-                "tab_id": tab_id,
-                "container_name": tab_state.container_name,
-                "title": tab_state.title,
-                "status": tab_state.status.value,
-                "error_count": tab_state.error_count,
-                "can_accept": tab_state.can_accept_request()
-            })
-        
-        return {
-            "websocket_connected": self.websocket is not None,
-            "tabs": tabs_status
-        }
-    
-    async def wait_for_response(self, request_id: str, timeout: float) -> dict:
-        future = asyncio.Future()
-        self.response_futures[request_id] = future
-        
-        try:
-            response = await asyncio.wait_for(future, timeout=timeout)
-            return response
-        except asyncio.TimeoutError:
-            if request_id in self.request_to_tab:
-                tab_id = self.request_to_tab[request_id]
-                self.cleanup_temp_tab_state(tab_id)
-                del self.request_to_tab[request_id]
-            raise HTTPException(status_code=504, detail="Request timeout - AI took too long to respond")
-        finally:
-            self.response_futures.pop(request_id, None)
     
     def resolve_response(self, request_id: str, response: dict):
         future = self.response_futures.get(request_id)
@@ -249,6 +178,62 @@ class PortManager:
                 future.set_result(response)
             except Exception:
                 pass
+    async def wait_for_response(self, request_id: str, timeout: float = 180.0) -> dict:
+        """
+        Đợi response từ ZenTab extension với timeout
+        
+        Args:
+            request_id: ID của request cần đợi response
+            timeout: Thời gian tối đa chờ (giây)
+            
+        Returns:
+            dict: Response data từ ZenTab
+            
+        Raises:
+            asyncio.TimeoutError: Nếu quá timeout chưa nhận được response
+            HTTPException: Nếu response chứa error
+        """
+        # Tạo future để chờ response
+        future = asyncio.Future()
+        self.response_futures[request_id] = future
+        
+        try:
+            # Đợi response với timeout
+            response = await asyncio.wait_for(future, timeout=timeout)
+            
+            # Kiểm tra response có lỗi không
+            if "error" in response:
+                from fastapi import HTTPException
+                error_msg = response["error"]
+                
+                # Xử lý các loại lỗi khác nhau
+                if "cooling down" in error_msg.lower() or "not ready" in error_msg.lower():
+                    raise HTTPException(status_code=503, detail=error_msg)
+                else:
+                    raise HTTPException(status_code=500, detail=error_msg)
+            
+            return response
+            
+        except asyncio.TimeoutError:
+            # Cleanup khi timeout
+            self.response_futures.pop(request_id, None)
+            self.request_to_tab.pop(request_id, None)
+            
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=504,
+                detail=f"Request timeout after {timeout}s - DeepSeek took too long to respond"
+            )
+            
+        except Exception as e:
+            # Cleanup khi có lỗi
+            self.response_futures.pop(request_id, None)
+            self.request_to_tab.pop(request_id, None)
+            raise
+            
+        finally:
+            # Luôn cleanup future sau khi xong
+            self.response_futures.pop(request_id, None)
 
     async def cleanup_pending_messages(self):
         try:
@@ -267,17 +252,28 @@ class PortManager:
         except Exception:
             pass
 
-    async def request_fresh_tabs(self, timeout: float = 5.0) -> list:
+    async def request_fresh_tabs(self, timeout: float = 10.0) -> list:
+        """
+        Request danh sách tabs rảnh từ ZenTab extension
+        Tăng timeout lên 10s để đảm bảo đủ thời gian cho ZenTab phản hồi
+        """
+        print(f"[PortManager] request_fresh_tabs() called with timeout={timeout}s")
+        
         if not self.websocket:
+            print(f"[PortManager] ❌ No WebSocket connection available")
             return []
         
         try:
             if self.websocket.closed:
+                print(f"[PortManager] ❌ WebSocket connection is closed")
                 return []
-        except Exception:
+        except Exception as check_error:
+            print(f"[PortManager] ❌ Error checking WebSocket status: {check_error}")
             return []
 
         request_id = f"tabs_req_{uuid.uuid4().hex[:8]}"
+        print(f"[PortManager] Generated request_id: {request_id}")
+        
         future = asyncio.Future()
         self.response_futures[request_id] = future
 
@@ -285,44 +281,51 @@ class PortManager:
             request_msg = {
                 "type": "getAvailableTabs",
                 "requestId": request_id,
-                "timestamp": time.time(),
+                "timestamp": int(time.time() * 1000),  # Timestamp in milliseconds
                 "urgent": True
             }
             
+            print(f"[PortManager] Sending getAvailableTabs request to ZenTab: {request_msg}")
             await self.websocket.send(json.dumps(request_msg))
+            print(f"[PortManager] ✅ Request sent, waiting for response (timeout={timeout}s)...")
 
+            # Đợi response từ ZenTab với timeout 10s
             response = await asyncio.wait_for(future, timeout=timeout)
-            return response.get('tabs', [])
+            tabs = response.get('tabs', [])
+            
+            print(f"[PortManager] ✅ Received response with {len(tabs)} tabs")
+            return tabs
             
         except asyncio.TimeoutError:
+            print(f"[PortManager] ❌ Timeout waiting for tabs response from ZenTab (waited {timeout}s)")
             return []
-        except Exception:
+        except Exception as e:
+            print(f"[PortManager] ❌ Error requesting tabs: {e}")
             return []
         finally:
             self.response_futures.pop(request_id, None)
+            print(f"[PortManager] Cleaned up request_id: {request_id}")
 
     def handle_available_tabs_response(self, request_id: str, tabs: list):
+        print(f"[PortManager] handle_available_tabs_response() called - request_id: {request_id}, tabs: {len(tabs)}")
+        
         future = self.response_futures.get(request_id)
-        if future and not future.done():
-            future.set_result({"tabs": tabs})
-
-    def get_temp_tab_state(self, tab_id: int) -> Optional[TabState]:
-        return self.temp_tab_states.get(tab_id)
-
-    def cleanup_temp_tab_state(self, tab_id: int):
-        self.temp_tab_states.pop(tab_id, None)
+        if not future:
+            print(f"[PortManager] ⚠️ No future found for request_id: {request_id}")
+            return
+        
+        if future.done():
+            print(f"[PortManager] ⚠️ Future already done for request_id: {request_id}")
+            return
+        
+        print(f"[PortManager] ✅ Setting result for request_id: {request_id}")
+        future.set_result({"tabs": tabs})
     
     async def schedule_request_cleanup(self, request_id: str, delay: float = 30.0):
         await asyncio.sleep(delay)
         
         if request_id in self.request_to_tab:
             self.request_to_tab.pop(request_id, None)
-
-    async def schedule_temp_tab_cleanup(self, tab_id: int, delay: float = 60.0):
-        await asyncio.sleep(delay)
-        
-        if tab_id in self.temp_tab_states:
-            self.temp_tab_states.pop(tab_id, None)
     
     async def cleanup_duplicate_detection(self):
         current_time = time.time()

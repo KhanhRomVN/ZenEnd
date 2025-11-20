@@ -1,6 +1,3 @@
-"""
-HTTP API routes
-"""
 import re
 import asyncio
 import time
@@ -13,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Header
 
 from config.settings import REQUEST_TIMEOUT
-from models import ChatCompletionRequest, TabStatus, TabState
+from models import ChatCompletionRequest
 from .dependencies import verify_api_key
 import uuid
 import time
@@ -122,62 +119,53 @@ def setup_routes(app, port_manager):
             )
         
         conn_status = port_manager.get_connection_status()
+        print(f"[API] Connection status: {conn_status}")
         
-        available_tabs = await port_manager.request_fresh_tabs()
+        # Kiểm tra WebSocket connection trước khi request tabs
+        if not conn_status.get('websocket_connected') or not conn_status.get('websocket_open'):
+            print(f"[API] ❌ WebSocket not connected - websocket_connected: {conn_status.get('websocket_connected')}, websocket_open: {conn_status.get('websocket_open')}")
+            raise HTTPException(
+                status_code=503,
+                detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
+            )
         
-        if not available_tabs:
+        print(f"[API] ✅ WebSocket connected, requesting fresh tabs...")
+        # Request danh sách tabs rảnh từ ZenTab với timeout 10s
+        available_tabs = await port_manager.request_fresh_tabs(timeout=10.0)
+        print(f"[API] Received {len(available_tabs)} tabs from ZenTab")
+        
+        if not available_tabs or len(available_tabs) == 0:
+            print(f"[API] ❌ No tabs available from ZenTab")
             raise HTTPException(
                 status_code=503,
                 detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
             )
 
-        free_tabs = [
-            tab for tab in available_tabs 
-            if tab.get('status') == 'free' and tab.get('canAccept', True)
-        ]
-
-        if not free_tabs:
-            cooling_tabs = [
-                tab for tab in available_tabs 
-                if tab.get('status') == 'free' and not tab.get('canAccept', False)
-            ]
-            
-            if cooling_tabs:
-                for tab in cooling_tabs:
-                    tab_id = tab['tabId']
-                    cooling_time = tab.get('coolingDown', 0)
-                    
-                    await asyncio.sleep(2)
-                    
-                    refreshed_tabs = await port_manager.request_fresh_tabs()
-                    refreshed_tab = next((t for t in refreshed_tabs if t['tabId'] == tab_id), None)
-                    
-                    if refreshed_tab and refreshed_tab.get('canAccept', False):
-                        selected_tab = refreshed_tab
-                        break
-
-                else:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="All tabs are currently busy or cooling down. Please try again in a few seconds."
-                    )
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
-                )
-        else:
-            selected_tab = free_tabs[0]
-
-        tab_id = selected_tab['tabId']
+        # ZenTab chỉ trả về 1 tab duy nhất, lấy tab đầu tiên
+        selected_tab = available_tabs[0]
+        tab_id = selected_tab.get('tabId')
         
-        # 🆕 VALIDATE: Kiểm tra tab_id có hợp lệ không
-        if not isinstance(tab_id, int) or tab_id <= 0:
+        print(f"[API] Selected tab: {selected_tab}")
+        
+        if not tab_id or not isinstance(tab_id, int) or tab_id <= 0:
+            print(f"[API] ❌ Invalid tab ID received: {tab_id}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Invalid tab ID received: {tab_id}"
+                detail=f"Invalid tab ID received from ZenTab: {tab_id}"
             )
-        container_name = selected_tab.get('containerName', 'Unknown')
+        
+        # Kiểm tra tab status
+        tab_status = selected_tab.get('status', 'unknown')
+        can_accept = selected_tab.get('canAccept', False)
+        
+        print(f"[API] Tab status: {tab_status}, canAccept: {can_accept}")
+        
+        if tab_status != 'free' or not can_accept:
+            print(f"[API] ❌ Tab is not ready - status: {tab_status}, canAccept: {can_accept}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Tab is not ready to accept requests. Status: {tab_status}, Can accept: {can_accept}"
+            )
 
         request_id = f"api-{uuid.uuid4().hex[:16]}"
 
@@ -200,16 +188,7 @@ def setup_routes(app, port_manager):
         else:
             prompt = raw_content
 
-        tab_state = TabState(
-            tab_id=tab_id,
-            container_name=container_name,
-            title=selected_tab.get('title', ''),
-            url=selected_tab.get('url', '')
-        )
-        tab_state.mark_busy(request_id)
         port_manager.request_to_tab[request_id] = tab_id
-
-        port_manager.temp_tab_states[tab_id] = tab_state
         
         ws_message = {
             "type": "sendPrompt",
@@ -221,7 +200,6 @@ def setup_routes(app, port_manager):
         try:
             await port_manager.websocket.send(json.dumps(ws_message))
         except Exception as e:
-            tab_state.mark_free()
             port_manager.request_to_tab.pop(request_id, None)
             raise HTTPException(status_code=500, detail=f"Failed to send prompt: {str(e)}")
         
@@ -251,29 +229,15 @@ def setup_routes(app, port_manager):
                     message = choice['message']
                     content = message.get('content')
             
-            # 🔧 CRITICAL FIX: KHÔNG cleanup temp_tab_state ngay lập tức
-            # Tab state sẽ tự cleanup sau 60s hoặc khi có request mới
-            # Điều này cho phép WebSocket handler có thời gian xử lý duplicate messages
-            
-            # 🆕 ENHANCED: Cleanup ngay lập tức + schedule backup cleanup
             port_manager.mark_request_completed(request_id)
 
-            # Cleanup temp tab state sau 10s (cho WebSocket handler xử lý xong)
-            asyncio.create_task(port_manager.schedule_temp_tab_cleanup(tab_id, delay=10.0))
-
-            # Schedule cleanup request mapping sau 30 giây (backup)
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=30.0))
             
             return response
             
         except HTTPException as he:
-            # Cleanup temp tab state ngay khi có lỗi HTTP
-            port_manager.cleanup_temp_tab_state(tab_id)
-            
-            # 🆕 THÊM: Đánh dấu request đã processed để chặn duplicates
             port_manager.mark_request_processed(request_id)
             
-            # Schedule cleanup request mapping
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
             
             if he.status_code == 503:
@@ -303,20 +267,12 @@ def setup_routes(app, port_manager):
                 
                 return fallback_response
         except Exception as e:
-            # Cleanup temp tab state ngay khi có exception
-            port_manager.cleanup_temp_tab_state(tab_id)
-            
-            # 🆕 THÊM: Đánh dấu request đã processed để chặn duplicates
             port_manager.mark_request_processed(request_id)
             
-            # Schedule cleanup request mapping
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
             
             raise HTTPException(status_code=500, detail=str(e))
         finally:
-            # 🔧 CRITICAL FIX: KHÔNG cleanup temp_tab_state trong finally
-            # Vì success case cần giữ state để WebSocket handler xử lý
-            # Chỉ cleanup trong error cases (đã xử lý ở except blocks)
             pass
     
     app.include_router(router)

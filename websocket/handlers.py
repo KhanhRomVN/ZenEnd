@@ -1,15 +1,11 @@
-"""
-WebSocket message handlers - Single connection version
-"""
 import json
 import time
 import asyncio
 from websockets.server import WebSocketServerProtocol
 import websockets
 
-from models import TabState
-
 async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_manager):
+    print(f"[WebSocket] New connection established from {websocket.remote_address}")
     await port_manager.update_websocket(websocket)
     ping_task = None
     
@@ -34,9 +30,9 @@ async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_m
                 pass
                 
     except websockets.exceptions.ConnectionClosed:
-        pass
-    except Exception:
-        pass
+        print(f"[WebSocket] Connection closed normally")
+    except Exception as e:
+        print(f"[WebSocket] ❌ Connection error: {e}")
     finally:
         if ping_task:
             ping_task.cancel()
@@ -71,6 +67,36 @@ async def handle_websocket_message(data: dict, port_manager):
     elif msg_type == "availableTabs":
         request_id = data.get("requestId")
         tabs = data.get("tabs", [])
+        
+        print(f"[WebSocket] Received availableTabs response - request_id: {request_id}, tabs count: {len(tabs)}")
+        
+        # 🆕 CHECK: Kiểm tra xem future có tồn tại và chưa done không
+        if request_id not in port_manager.response_futures:
+            print(f"[WebSocket] ⚠️ No future found for request_id: {request_id}, ignoring duplicate response")
+            return
+        
+        future = port_manager.response_futures.get(request_id)
+        if future.done():
+            print(f"[WebSocket] ⚠️ Future already done for request_id: {request_id}, ignoring duplicate response")
+            return
+        
+        # Validate tabs data structure
+        if not isinstance(tabs, list):
+            print(f"[WebSocket] ⚠️ Invalid tabs data type: {type(tabs)}, converting to empty list")
+            tabs = []
+        
+        # Log tab details
+        if len(tabs) > 0:
+            for idx, tab in enumerate(tabs):
+                tab_id = tab.get('tabId', 'unknown')
+                status = tab.get('status', 'unknown')
+                can_accept = tab.get('canAccept', False)
+                print(f"[WebSocket]   Tab {idx}: tabId={tab_id}, status={status}, canAccept={can_accept}")
+        else:
+            print(f"[WebSocket] ⚠️ Received 0 tabs from ZenTab extension")
+        
+        # Resolve future cho request này
+        print(f"[WebSocket] Resolving future for request_id: {request_id}")
         port_manager.handle_available_tabs_response(request_id, tabs)
     
     elif msg_type == "focusedTabsUpdate":
@@ -97,7 +123,6 @@ async def handle_websocket_message(data: dict, port_manager):
         message_too_old = message_age > 30.0
         in_request_to_tab = request_id in port_manager.request_to_tab
         expected_tab_id = port_manager.request_to_tab.get(request_id) if in_request_to_tab else None
-        temp_tab_exists = expected_tab_id in port_manager.temp_tab_states if expected_tab_id else False
         already_forwarded = message_key in port_manager.forwarded_messages
         
         future_done = False
@@ -135,14 +160,8 @@ async def handle_websocket_message(data: dict, port_manager):
             port_manager.mark_request_completed(request_id)
             return
         
-        tab_state = port_manager.get_temp_tab_state(tab_id)
-        if not tab_state and expected_tab_id is not None:
-            pass
-        
         if not success:
             error_msg = data.get("error", "Unknown error")
-            if tab_state:
-                port_manager.cleanup_temp_tab_state(tab_id)
             port_manager.resolve_response(request_id, {"error": error_msg})
             port_manager.mark_request_processed(request_id)
             port_manager.mark_request_completed(request_id)
@@ -193,7 +212,6 @@ async def handle_websocket_message(data: dict, port_manager):
         port_manager.mark_request_completed(request_id)
         
         asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
-        asyncio.create_task(port_manager.schedule_temp_tab_cleanup(tab_id, delay=15.0))
 
 def _ensure_openai_format(response_data: dict, request_id: str) -> dict:
     if all(key in response_data for key in ['id', 'object', 'created', 'model', 'choices']):
