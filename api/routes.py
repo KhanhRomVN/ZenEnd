@@ -462,10 +462,27 @@ def setup_routes(app, port_manager):
 
         request_id = f"api-{uuid.uuid4().hex[:16]}"
 
+        # 🆕 Extract BOTH system prompt and user messages
+        system_messages = [msg for msg in request.messages if msg.role == "system"]
         user_messages = [msg for msg in request.messages if msg.role == "user"]
+        
         if not user_messages:
             raise HTTPException(status_code=400, detail="No user message found in request")
 
+        # Extract system prompt (if exists)
+        system_prompt = ""
+        if system_messages:
+            system_content = system_messages[0].content
+            if isinstance(system_content, str):
+                system_prompt = system_content
+            elif isinstance(system_content, list):
+                text_parts = []
+                for item in system_content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                system_prompt = "\n\n".join(text_parts)
+        
+        # Extract user message
         raw_content = user_messages[-1].content
         
         if isinstance(raw_content, list):
@@ -477,16 +494,18 @@ def setup_routes(app, port_manager):
                     elif item.get("type") == "image":
                         text_parts.append("[IMAGE - Not supported]")
             
-            prompt = "\n\n".join(text_parts)
+            user_prompt = "\n\n".join(text_parts)
         else:
-            prompt = raw_content
+            user_prompt = raw_content
 
         port_manager.request_to_tab[request_id] = tab_id
         
+        # 🆕 Send both system prompt and user prompt to ZenTab
         ws_message = {
             "type": "sendPrompt",
             "tabId": tab_id,
-            "prompt": prompt,
+            "systemPrompt": system_prompt,  # NEW: System prompt from Cline
+            "userPrompt": user_prompt,      # NEW: Renamed from "prompt"
             "requestId": request_id
         }
         
