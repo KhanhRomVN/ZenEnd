@@ -40,23 +40,69 @@ def _extract_folder_path(messages: list) -> str | None:
 
 def _detect_new_task(messages: list) -> bool:
     """
-    Kiểm tra xem có <task></task> trong MESSAGE CUỐI CÙNG không.
-    Trả về True nếu đây là task mới.
+    Kiểm tra xem có <task></task> KHÔNG RỖNG trong MESSAGE CUỐI CÙNG không.
+    Trả về True nếu đây là task mới (có nội dung task).
     """
     if not messages:
+        print("[Request Detection] ℹ️ No messages found - not a new task")
         return False
     
     latest_msg = messages[-1]
     content = latest_msg.content
+    
+    # Log message role và type
+    msg_role = latest_msg.role
+    print(f"[Request Detection] 🔍 Checking latest message - Role: {msg_role}")
+    
     if isinstance(content, str):
-        if '<task>' in content and '</task>' in content:
+        has_task_tag = '<task>' in content and '</task>' in content
+        if has_task_tag:
+            # 🆕 CRITICAL: Check if task content is NOT empty
+            task_start_idx = content.find('<task>') + 6
+            task_end_idx = content.find('</task>')
+            task_content = content[task_start_idx:task_end_idx].strip()
+            
+            if len(task_content) == 0:
+                print(f"[Request Detection] ⚠️ EMPTY <task></task> tag found - treating as EXISTING TASK")
+                print(f"[Request Detection] 🔄 CONTINUING EXISTING TASK")
+                return False
+            
+            # Extract task content preview
+            task_preview_end = min(task_end_idx + 7, len(content))
+            task_preview = content[content.find('<task>'):task_preview_end][:100]
+            print(f"[Request Detection] ✅ NEW TASK DETECTED (string content)")
+            print(f"[Request Detection] 📋 Task preview: {task_preview}...")
             return True
+        else:
+            print(f"[Request Detection] ❌ No <task> tag found (string content, {len(content)} chars)")
     elif isinstance(content, list):
-        for item in content:
+        print(f"[Request Detection] 🔍 Checking array content ({len(content)} items)")
+        for idx, item in enumerate(content):
             if isinstance(item, dict) and item.get("type") == "text":
                 text = item.get("text", "")
-                if '<task>' in text and '</task>' in text:
+                has_task_tag = '<task>' in text and '</task>' in text
+                if has_task_tag:
+                    # 🆕 CRITICAL: Check if task content is NOT empty
+                    task_start_idx = text.find('<task>') + 6
+                    task_end_idx = text.find('</task>')
+                    task_content = text[task_start_idx:task_end_idx].strip()
+                    
+                    if len(task_content) == 0:
+                        print(f"[Request Detection] ⚠️ EMPTY <task></task> tag found in array item {idx} - treating as EXISTING TASK")
+                        print(f"[Request Detection] 🔄 CONTINUING EXISTING TASK")
+                        return False
+                    
+                    # Extract task content preview
+                    task_preview_end = min(task_end_idx + 7, len(text))
+                    task_preview = text[text.find('<task>'):task_preview_end][:100]
+                    print(f"[Request Detection] ✅ NEW TASK DETECTED (array item {idx})")
+                    print(f"[Request Detection] 📋 Task preview: {task_preview}...")
                     return True
+        print(f"[Request Detection] ❌ No <task> tag found in any array items")
+    else:
+        print(f"[Request Detection] ⚠️ Unknown content type: {type(content)}")
+    
+    print("[Request Detection] 🔄 CONTINUING EXISTING TASK")
     return False
 
 def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = False) -> dict:
@@ -319,6 +365,16 @@ def setup_routes(app, port_manager):
         
         tab_id = selected_tab.get('tabId')
         
+        # 🆕 LOG: Tab selection result
+        print(f"[Chat Completion] ✅ TAB SELECTED")
+        print(f"[Chat Completion] 🔢 Tab ID: {tab_id}")
+        print(f"[Chat Completion] 📊 Tab Status: {selected_tab.get('status', 'unknown')}")
+        print(f"[Chat Completion] ✔️ Can Accept: {selected_tab.get('canAccept', False)}")
+        if selected_tab.get('folderPath'):
+            print(f"[Chat Completion] 📁 Linked Folder: {selected_tab.get('folderPath')}")
+        else:
+            print(f"[Chat Completion] 📁 Linked Folder: None (will be linked after prompt sent)")
+        
         if not tab_id or not isinstance(tab_id, int) or tab_id <= 0:
             raise HTTPException(
                 status_code=500,
@@ -335,6 +391,19 @@ def setup_routes(app, port_manager):
             )
 
         request_id = f"api-{uuid.uuid4().hex[:16]}"
+        
+        # 🆕 CRITICAL: Nếu là new task VÀ có folder_path → cleanup old links
+        if is_new_task and folder_path:
+            cleanup_msg = {
+                "type": "cleanupFolderLink",
+                "folderPath": folder_path,
+                "timestamp": int(time.time() * 1000)
+            }
+            try:
+                await port_manager.websocket.send(json.dumps(cleanup_msg))
+                await asyncio.sleep(0.5)
+            except Exception as cleanup_error:
+                pass
 
         # Extract BOTH system prompt and user messages
         system_messages = [msg for msg in request.messages if msg.role == "system"]
@@ -371,8 +440,44 @@ def setup_routes(app, port_manager):
             user_prompt = "\n\n".join(text_parts)
         else:
             user_prompt = raw_content
+        
+        # 🆕 LOG: User prompt analysis
+        print("\n" + "~"*80)
+        print("[User Prompt Analysis] 📝 USER PROMPT DETAILS")
+        print("~"*80)
+        print(f"[User Prompt Analysis] 📏 Total Length: {len(user_prompt)} chars")
+        print(f"[User Prompt Analysis] 🔍 Contains <task> tag: {'<task>' in user_prompt}")
+        print(f"[User Prompt Analysis] 🔍 Contains </task> tag: {'</task>' in user_prompt}")
+        
+        # Check if task tag is empty
+        if '<task>' in user_prompt and '</task>' in user_prompt:
+            task_start = user_prompt.find('<task>') + 6
+            task_end = user_prompt.find('</task>')
+            task_content = user_prompt[task_start:task_end].strip()
+            print(f"[User Prompt Analysis] 📦 Task Content Length: {len(task_content)} chars")
+            print(f"[User Prompt Analysis] 📦 Task Is Empty: {len(task_content) == 0}")
+            if len(task_content) > 0:
+                preview = task_content[:200].replace('\n', ' ')
+                print(f"[User Prompt Analysis] 📋 Task Preview: {preview}...")
+            else:
+                print(f"[User Prompt Analysis] ⚠️ Task tag is EMPTY!")
+        
+        # Show first 500 chars of user prompt
+        prompt_preview = user_prompt[:500].replace('\n', ' ')
+        print(f"[User Prompt Analysis] 📄 Prompt Preview (500 chars): {prompt_preview}...")
+        print("~"*80 + "\n")
 
         port_manager.request_to_tab[request_id] = tab_id
+        
+        # 🆕 LOG: Sending prompt details
+        print("\n" + "-"*80)
+        print(f"[Chat Completion] 📤 SENDING PROMPT TO ZENTAB")
+        print("-"*80)
+        print(f"[Chat Completion] 🆔 Request ID: {request_id}")
+        print(f"[Chat Completion] 🔢 Target Tab: {tab_id}")
+        print(f"[Chat Completion] 📝 System Prompt: {len(system_prompt)} chars")
+        print(f"[Chat Completion] 💬 User Prompt: {len(user_prompt)} chars")
+        print(f"[Chat Completion] 🏷️ Is New Task: {is_new_task}")
         
         # Send prompt với folder_path handling
         ws_message = {
@@ -387,6 +492,11 @@ def setup_routes(app, port_manager):
         # Chỉ gửi folder_path khi là new task
         if is_new_task and folder_path:
             ws_message["folderPath"] = folder_path
+            print(f"[Chat Completion] 📁 Folder Path (NEW TASK): {folder_path}")
+            print(f"[Chat Completion] 🔗 Action: Tab will be linked to this folder after prompt sent")
+        else:
+            print(f"[Chat Completion] 📁 Folder Path: Not included (existing task)")
+        print("-"*80 + "\n")
         
         try:
             await port_manager.websocket.send(json.dumps(ws_message))
