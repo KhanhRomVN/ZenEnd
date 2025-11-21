@@ -10,140 +10,62 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Header
 
-def _log_response_fields_extraction(response: dict, stage: str = "raw", is_fake: bool = False):
-    """Log chi tiết các field được extract từ response"""
-    source = "FAKE" if is_fake else "REAL"
-    print(f"\n[FIELD EXTRACTION - {stage} - {source}]")
-    print(f"{'-'*80}")
-    
-    # Log top-level fields
-    print(f"Top-level fields:")
-    print(f"  id: {response.get('id', 'N/A')}")
-    print(f"  object: {response.get('object', 'N/A')}")
-    print(f"  created: {response.get('created', 'N/A')}")
-    print(f"  model: {response.get('model', 'N/A')}")
-    print(f"  system_fingerprint: {response.get('system_fingerprint', 'N/A')}")
-    
-    # Log choices extraction
-    original_choices = response.get('choices', [])
-    print(f"\nChoices extraction:")
-    print(f"  Total choices: {len(original_choices)}")
-    
-    if original_choices:
-        original_choice = original_choices[0]
-        print(f"  Choice[0] index: {original_choice.get('index', 'N/A')}")
-        print(f"  Choice[0] finish_reason: {original_choice.get('finish_reason', 'N/A')}")
-        print(f"  Choice[0] logprobs: {original_choice.get('logprobs', 'N/A')}")
-        
-        # 🆕 Log structure type (message vs delta)
-        has_message = 'message' in original_choice
-        has_delta = 'delta' in original_choice
-        print(f"\nStructure type:")
-        print(f"  has 'message': {has_message}")
-        print(f"  has 'delta': {has_delta}")
-        
-        # Log message/delta extraction
-        message_data = original_choice.get('message') or original_choice.get('delta', {})
-        print(f"\nMessage/Delta extraction:")
-        print(f"  role: {message_data.get('role', 'N/A')}")
-        content = message_data.get('content', '')
-        print(f"  content length: {len(content) if content else 0} chars")
-        if content:
-            content_preview = content[:150] + "..." if len(content) > 150 else content
-            print(f"  content preview: {content_preview}")
-        print(f"  tool_calls: {message_data.get('tool_calls', 'None')}")
-    
-    # Log usage extraction
-    original_usage = response.get('usage', {})
-    print(f"\nUsage extraction:")
-    print(f"  prompt_tokens: {original_usage.get('prompt_tokens', 0)}")
-    print(f"  completion_tokens: {original_usage.get('completion_tokens', 0)}")
-    print(f"  total_tokens: {original_usage.get('total_tokens', 0)}")
-    
-    print(f"{'-'*80}\n")
+def _extract_folder_path(messages: list) -> str | None:
+    """
+    Extract folder_path từ system/user messages.
+    Tìm pattern: # Current Working Directory (/path/to/folder)
+    """
+    for msg in messages:
+        content = msg.content
+        if isinstance(content, str):
+            match = re.search(
+                r'# Current Working Directory \(([^)]+)\)',
+                content
+            )
+            if match:
+                folder_path = match.group(1)
+                return folder_path
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text", "")
+                    match = re.search(
+                        r'# Current Working Directory \(([^)]+)\)',
+                        text
+                    )
+                    if match:
+                        folder_path = match.group(1)
+                        return folder_path
+    return None
 
-def _log_final_response(response: dict, is_fake: bool = False):
-    """Log final response để so sánh fake vs real response"""
-    response_type = "FAKE" if is_fake else "REAL"
+def _detect_new_task(messages: list) -> bool:
+    """
+    Kiểm tra xem có <task></task> trong MESSAGE CUỐI CÙNG không.
+    Trả về True nếu đây là task mới.
+    """
+    if not messages:
+        return False
     
-    print(f"\n{'='*80}")
-    print(f"[FINAL RESPONSE - {response_type}]")
-    print(f"{'='*80}")
-    
-    # Log response ID và metadata
-    print(f"ID: {response.get('id', 'N/A')}")
-    print(f"Model: {response.get('model', 'N/A')}")
-    print(f"Object: {response.get('object', 'N/A')}")
-    print(f"Created: {response.get('created', 'N/A')}")
-    
-    # Log choices details
-    choices = response.get('choices', [])
-    print(f"\nChoices count: {len(choices)}")
-    
-    for i, choice in enumerate(choices):
-        print(f"\n--- Choice {i} ---")
-        print(f"Index: {choice.get('index', 'N/A')}")
-        print(f"Finish reason: {choice.get('finish_reason', 'N/A')}")
-            
-        # 🆕 Log structure type
-        has_message = 'message' in choice
-        has_delta = 'delta' in choice
-        print(f"Structure: message={has_message}, delta={has_delta}")
-            
-        # Extract từ message hoặc delta
-        message_data = choice.get('message') or choice.get('delta', {})
-        role = message_data.get('role', 'N/A')
-        content = message_data.get('content', '')
-        tool_calls = message_data.get('tool_calls')
-            
-        print(f"Role: {role}")
-        print(f"Content length: {len(content) if content else 0} chars")
-            
-        if content:
-            content_preview = content[:200] + "..." if len(content) > 200 else content
-            print(f"Content preview: {content_preview}")
-            
-        # Only log tool_calls nếu tồn tại
-        if tool_calls:
-            print(f"Tool calls count: {len(tool_calls)}")
-            for j, tool in enumerate(tool_calls):
-                tool_name = tool.get('function', {}).get('name', 'N/A')
-                print(f"  Tool {j}: {tool_name}")
-        else:
-            print(f"Tool calls: None")
-
-    # Log usage
-    usage = response.get('usage', {})
-    print(f"\nUsage:")
-    print(f"  Prompt tokens: {usage.get('prompt_tokens', 0)}")
-    print(f"  Completion tokens: {usage.get('completion_tokens', 0)}")
-    print(f"  Total tokens: {usage.get('total_tokens', 0)}")
-    
-    # 🆕 Log full JSON (formatted) - dễ copy/paste
-    print(f"\n--- Full JSON Response ---")
-    print(json.dumps(response, indent=2, ensure_ascii=False))
-    print(f"{'='*80}\n")
-
-from config.settings import REQUEST_TIMEOUT
-from models import ChatCompletionRequest
-from .dependencies import verify_api_key
-import uuid
-import time
-
-
-router = APIRouter()
+    latest_msg = messages[-1]
+    content = latest_msg.content
+    if isinstance(content, str):
+        if '<task>' in content and '</task>' in content:
+            return True
+    elif isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                if '<task>' in text and '</task>' in text:
+                    return True
+    return False
 
 def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = False) -> dict:
     """
     Rebuild response từ ZenTab thành clean OpenAI completion format.
     Extract từng field và tạo lại object mới thay vì parse phức tạp.
     """
-    
     if not isinstance(response, dict):
         raise HTTPException(status_code=500, detail="Invalid response format: not a dict")
-    
-    # 🆕 LOG: Raw response fields extraction (với flag is_fake)
-    _log_response_fields_extraction(response, stage="raw_from_provider", is_fake=is_fake)
     
     # Extract top-level fields
     response_id = response.get('id', f'chatcmpl-{request_id}')
@@ -151,13 +73,6 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     created = response.get('created', int(time.time()))
     model = response.get('model', 'deepseek-chat')
     system_fingerprint = response.get('system_fingerprint', f'fp_{uuid.uuid4().hex[:8]}')
-    
-    print(f"[EXTRACTED TOP-LEVEL FIELDS]")
-    print(f"  response_id: {response_id}")
-    print(f"  object_type: {object_type}")
-    print(f"  created: {created}")
-    print(f"  model: {model}")
-    print(f"  system_fingerprint: {system_fingerprint}\n")
     
     # Extract choices array
     original_choices = response.get('choices', [])
@@ -170,37 +85,16 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     finish_reason = original_choice.get('finish_reason', 'stop')
     logprobs = original_choice.get('logprobs', None)
     
-    print(f"[EXTRACTED CHOICE[0] FIELDS]")
-    print(f"  choice_index: {choice_index}")
-    print(f"  finish_reason: {finish_reason}")
-    print(f"  logprobs: {logprobs}\n")
-    
-    # Extract message/delta (ZenTab có thể trả về 'delta' hoặc 'message')
-    has_message = 'message' in original_choice
-    has_delta = 'delta' in original_choice
+    # Extract message/delta
     message_data = original_choice.get('message') or original_choice.get('delta', {})
-    
     role = message_data.get('role', 'assistant')
     raw_content = message_data.get('content', '')
     tool_calls = message_data.get('tool_calls', None)
     
-    # 🆕 FIX: Decode escaped newlines nếu content là string với \\n
+    # Fix: Decode escaped newlines
     content = raw_content
     if isinstance(raw_content, str) and '\\n' in raw_content:
-        # Replace escaped newlines với real newlines
         content = raw_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
-        print(f"[CONTENT FIX] Decoded {raw_content.count(chr(92) + 'n')} escaped newlines")
-    
-    print(f"[EXTRACTED MESSAGE/DELTA FIELDS]")
-    print(f"  has_message: {has_message}")
-    print(f"  has_delta: {has_delta}")
-    print(f"  role: {role}")
-    print(f"  raw_content length: {len(raw_content) if raw_content else 0} chars")
-    print(f"  decoded_content length: {len(content) if content else 0} chars")
-    if content:
-        content_preview = content[:150] + "..." if len(content) > 150 else content
-        print(f"  content preview: {content_preview}")
-    print(f"  tool_calls: {tool_calls}\n")
     
     # Extract usage
     original_usage = response.get('usage', {})
@@ -208,19 +102,12 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     completion_tokens = original_usage.get('completion_tokens', 0)
     total_tokens = original_usage.get('total_tokens', 0)
     
-    print(f"[EXTRACTED USAGE FIELDS]")
-    print(f"  prompt_tokens: {prompt_tokens}")
-    print(f"  completion_tokens: {completion_tokens}")
-    print(f"  total_tokens: {total_tokens}\n")
-    
-    # 🆕 Rebuild: Fake dùng 'message' + 'tool_calls', Real dùng 'delta' (không tool_calls)
+    # Rebuild: Fake dùng 'message' + 'tool_calls', Real dùng 'delta'
     if is_fake:
-        # Fake response: dùng 'message' + 'tool_calls'
         message_obj = {
             'role': role,
             'content': content
         }
-        # Only add tool_calls if it's valid (not None and not empty)
         if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
             message_obj['tool_calls'] = tool_calls
         
@@ -230,9 +117,7 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
             'finish_reason': finish_reason,
             'logprobs': logprobs
         }
-        print(f"[BUILD MODE] Using 'message' + 'tool_calls' (FAKE)")
     else:
-        # Real response: dùng 'delta' (không tool_calls) - delta phải đứng TRƯỚC finish_reason
         choice_data = {
             'index': choice_index,
             'delta': {
@@ -242,7 +127,6 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
             'finish_reason': finish_reason,
             'logprobs': logprobs
         }
-        print(f"[BUILD MODE] Using 'delta' without 'tool_calls' (REAL)\n")
     
     # Rebuild clean response
     clean_response = {
@@ -259,41 +143,15 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
         'system_fingerprint': system_fingerprint
     }
     
-    # 🆕 LOG: Rebuilt response structure
-    print(f"[REBUILT CLEAN RESPONSE - JSON]")
-    print(json.dumps(clean_response, indent=2, ensure_ascii=False))
-    print()
-    
     return clean_response
 
-def _build_choice_for_response(choice_index: int, finish_reason: str, logprobs, 
-                               role: str, content: str, tool_calls, is_fake: bool) -> dict:
-    """
-    Build choice object - structure khác nhau cho fake vs real
-    - Fake: dùng 'message' field + có 'tool_calls'
-    - Real: dùng 'delta' field + không có 'tool_calls' (delta phải đứng TRƯỚC finish_reason)
-    """
-    if is_fake:
-        return {
-            'index': choice_index,
-            'message': {
-                'role': role,
-                'content': content,
-                'tool_calls': tool_calls
-            },
-            'finish_reason': finish_reason,
-            'logprobs': logprobs
-        }
-    else:
-        return {
-            'index': choice_index,
-            'delta': {
-                'role': role,
-                'content': content
-            },
-            'finish_reason': finish_reason,
-            'logprobs': logprobs
-        }
+from config.settings import REQUEST_TIMEOUT
+from models import ChatCompletionRequest
+from .dependencies import verify_api_key
+import uuid
+import time
+
+router = APIRouter()
 
 def setup_routes(app, port_manager):
     """Setup routes với port_manager dependency"""
@@ -356,25 +214,7 @@ def setup_routes(app, port_manager):
             
             fake_request_id = uuid.uuid4().hex[:16]
             
-            print(f"\n[RAW FAKE RESPONSE - PRE-VALIDATION]")
-            print(f"{'='*80}")
-            print(json.dumps(fake_response, indent=2, ensure_ascii=False))
-            print(f"{'='*80}\n")
-            
             if request.stream and fake_response.get("object") == "chat.completion.chunk":
-                from fastapi.responses import StreamingResponse
-                
-                print(f"\n[STREAMING DEBUG]")
-                print(f"  object: {fake_response.get('object')}")
-                print(f"  choices count: {len(fake_response.get('choices', []))}")
-                if fake_response.get('choices'):
-                    choice = fake_response['choices'][0]
-                    print(f"  delta keys: {list(choice.get('delta', {}).keys())}")
-                    delta_content = choice.get('delta', {}).get('content')
-                    print(f"  delta.content type: {type(delta_content)}")
-                    print(f"  delta.content length: {len(delta_content) if delta_content else 0}")
-                    print(f"  finish_reason: {choice.get('finish_reason')}")
-                
                 async def generate():
                     yield f"data: {json.dumps(fake_response)}\n\n"
                     yield "data: [DONE]\n\n"
@@ -383,7 +223,6 @@ def setup_routes(app, port_manager):
                     generate(),
                     media_type="text/event-stream"
                 )
-                
             else:
                 try:
                     fake_response = _validate_and_fix_response(
@@ -392,7 +231,6 @@ def setup_routes(app, port_manager):
                         is_fake=True
                     )
                 except Exception as e:
-                    print(f"[ERROR] Failed to validate fake response: {e}")
                     fake_response = {
                         "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
                         "object": "chat.completion",
@@ -415,8 +253,6 @@ def setup_routes(app, port_manager):
                         "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
                     }
                 
-                _log_final_response(fake_response, is_fake=True)
-                
                 return fake_response
 
         SUPPORTED_MODELS = ["deepseek-chat", "deepseek-coder", "deepseek-coder-v2"]
@@ -434,15 +270,53 @@ def setup_routes(app, port_manager):
                 detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
             )
         
-        available_tabs = await port_manager.request_fresh_tabs(timeout=10.0)
-        
-        if not available_tabs or len(available_tabs) == 0:
-            raise HTTPException(
-                status_code=503,
-                detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
-            )
+        # Extract folder_path và detect new task
+        folder_path = _extract_folder_path(request.messages)
+        is_new_task = _detect_new_task(request.messages)
 
-        selected_tab = available_tabs[0]
+        # Chọn tab dựa trên new task vs existing task
+        if is_new_task:
+            # New task: request tất cả tabs rảnh
+            available_tabs = await port_manager.request_fresh_tabs(timeout=10.0)
+            
+            if not available_tabs or len(available_tabs) == 0:
+                raise HTTPException(
+                    status_code=503,
+                    detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
+                )
+            
+            # Nếu có folder_path, gửi WS để xóa liên kết cũ
+            if folder_path:
+                cleanup_msg = {
+                    "type": "cleanupFolderLink",
+                    "folderPath": folder_path,
+                    "timestamp": int(time.time() * 1000)
+                }
+                try:
+                    await port_manager.websocket.send(json.dumps(cleanup_msg))
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+            
+            selected_tab = available_tabs[0]
+        else:
+            # Existing task: tìm tab có folder_path khớp
+            if not folder_path:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot find folder_path in request. Please ensure the task context is included."
+                )
+            
+            folder_tabs = await port_manager.request_tabs_by_folder(folder_path, timeout=10.0)
+            
+            if not folder_tabs or len(folder_tabs) == 0:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"No tabs linked to folder '{folder_path}'. Please start a new task first."
+                )
+            
+            selected_tab = folder_tabs[0]
+        
         tab_id = selected_tab.get('tabId')
         
         if not tab_id or not isinstance(tab_id, int) or tab_id <= 0:
@@ -462,14 +336,14 @@ def setup_routes(app, port_manager):
 
         request_id = f"api-{uuid.uuid4().hex[:16]}"
 
-        # 🆕 Extract BOTH system prompt and user messages
+        # Extract BOTH system prompt and user messages
         system_messages = [msg for msg in request.messages if msg.role == "system"]
         user_messages = [msg for msg in request.messages if msg.role == "user"]
         
         if not user_messages:
             raise HTTPException(status_code=400, detail="No user message found in request")
 
-        # Extract system prompt (if exists)
+        # Extract system prompt
         system_prompt = ""
         if system_messages:
             system_content = system_messages[0].content
@@ -500,14 +374,19 @@ def setup_routes(app, port_manager):
 
         port_manager.request_to_tab[request_id] = tab_id
         
-        # 🆕 Send both system prompt and user prompt to ZenTab
+        # Send prompt với folder_path handling
         ws_message = {
             "type": "sendPrompt",
             "tabId": tab_id,
-            "systemPrompt": system_prompt,  # NEW: System prompt from Cline
-            "userPrompt": user_prompt,      # NEW: Renamed from "prompt"
-            "requestId": request_id
+            "systemPrompt": system_prompt,
+            "userPrompt": user_prompt,
+            "requestId": request_id,
+            "isNewTask": is_new_task
         }
+        
+        # Chỉ gửi folder_path khi là new task
+        if is_new_task and folder_path:
+            ws_message["folderPath"] = folder_path
         
         try:
             await port_manager.websocket.send(json.dumps(ws_message))
@@ -534,12 +413,8 @@ def setup_routes(app, port_manager):
             
             response = _validate_and_fix_response(response, request_id, is_fake=False)
             
-            _log_final_response(response, is_fake=False)
-            
-            # 🆕 CRITICAL FIX: Wrap real response trong StreamingResponse
+            # Wrap real response trong StreamingResponse
             if response.get("object") == "chat.completion.chunk":
-                print(f"\n[REAL RESPONSE STREAMING] Wrapping response in StreamingResponse")
-                
                 async def generate_real():
                     yield f"data: {json.dumps(response)}\n\n"
                     yield "data: [DONE]\n\n"
@@ -580,8 +455,6 @@ def setup_routes(app, port_manager):
                     },
                     "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
                 }
-                
-                _log_final_response(fallback_response, is_fake=False)
                 
                 return fallback_response
         except Exception as e:

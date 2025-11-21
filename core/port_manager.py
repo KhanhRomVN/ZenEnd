@@ -276,13 +276,54 @@ class PortManager:
             request_msg = {
                 "type": "getAvailableTabs",
                 "requestId": request_id,
-                "timestamp": int(time.time() * 1000),  # Timestamp in milliseconds
+                "timestamp": int(time.time() * 1000),
                 "urgent": True
             }
             
             await self.websocket.send(json.dumps(request_msg))
 
-            # Đợi response từ ZenTab với timeout 10s
+            response = await asyncio.wait_for(future, timeout=timeout)
+            tabs = response.get('tabs', [])
+            
+            return tabs
+            
+        except asyncio.TimeoutError:
+            return []
+        except Exception:
+            return []
+        finally:
+            self.response_futures.pop(request_id, None)
+
+    async def request_tabs_by_folder(self, folder_path: str, timeout: float = 10.0) -> list:
+        """
+        Request danh sách tabs có folder_path khớp từ ZenTab.
+        Dùng cho các request KHÔNG phải new task.
+        """
+        if not self.websocket:
+            return []
+        
+        try:
+            if self.websocket.closed:
+                return []
+        except Exception:
+            return []
+
+        request_id = f"tabs_folder_{uuid.uuid4().hex[:8]}"
+        
+        future = asyncio.Future()
+        self.response_futures[request_id] = future
+
+        try:
+            request_msg = {
+                "type": "getTabsByFolder",
+                "requestId": request_id,
+                "folderPath": folder_path,
+                "timestamp": int(time.time() * 1000),
+                "urgent": True
+            }
+            
+            await self.websocket.send(json.dumps(request_msg))
+
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
             

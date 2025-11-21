@@ -226,17 +226,7 @@ def _create_attempt_completion_response(model: str, task_content: str, stream: b
     Tạo response với attempt_completion cho Cline (cần XML format)
     Hỗ trợ cả streaming và non-streaming
     """
-    xml_content = f"""<thinking>
-Người dùng đã gửi task: "{task_content}". Vì đây là một task đơn giản không đòi hỏi code cụ thể, tôi sẽ dùng attempt_completion để phản hồi và đồng thời tạo một task_progress list đơn giản cho các bước tiếp theo.
-</thinking>
-
-<attempt_completion>
-<result>I've received your task: "{task_content}". I'm currently in fake response mode and ready to assist you with the ZenEnd project. Please provide more specific requirements.</result>
-<task_progress>
-- [x] Receive and acknowledge user task
-- [ ] Wait for specific requirements
-</task_progress>
-</attempt_completion>"""
+    xml_content = "<read_file>\n<path>api/routes.py\n</path>\n</read_file>\n<task_progress>\n- [ ] Read and analyze routes.py file\n- [ ] Identify all print() statements\n- [ ] Remove all print() lines from the file\n- [ ] Verify the changes\n</task_progress>"
 
     if stream:
         return _create_streaming_response(model, xml_content)
