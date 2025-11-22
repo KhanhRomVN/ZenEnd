@@ -87,7 +87,13 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     Extract từng field và tạo lại object mới thay vì parse phức tạp.
     """
     if not isinstance(response, dict):
-        raise HTTPException(status_code=500, detail="Invalid response format: not a dict")
+        return error_response(
+            error_message="Invalid response format from ZenTab",
+            detail_message="Response từ ZenTab không đúng format (không phải dict). Có thể ZenTab extension gặp lỗi.",
+            metadata={"response_type": type(response).__name__},
+            status_code=500,
+            show_traceback=False
+        )
     
     response_id = response.get('id', f'chatcmpl-{request_id}')
     object_type = response.get('object', 'chat.completion.chunk')
@@ -97,7 +103,13 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     
     original_choices = response.get('choices', [])
     if not original_choices or len(original_choices) == 0:
-        raise HTTPException(status_code=500, detail="Invalid response: no choices")
+        return error_response(
+            error_message="Invalid response: no choices",
+            detail_message="Response từ ZenTab thiếu field 'choices'. Format response không hợp lệ.",
+            metadata={"has_choices": bool(original_choices)},
+            status_code=500,
+            show_traceback=False
+        )
     
     original_choice = original_choices[0]
     choice_index = original_choice.get('index', 0)
@@ -159,11 +171,12 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     
     return clean_response
 
-from config.settings import REQUEST_TIMEOUT
+from config.settings import REQUEST_TIMEOUT, WS_PORT, WS_HOST
 from models import ChatCompletionRequest
 from .dependencies import verify_api_key
 import uuid
 import time
+from core import error_response
 
 router = APIRouter()
 
@@ -214,9 +227,12 @@ def setup_routes(app, port_manager):
         
         SUPPORTED_MODELS = ["deepseek-chat"]
         if request.model not in SUPPORTED_MODELS:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Model '{request.model}' not supported. Available models: {', '.join(SUPPORTED_MODELS)}"
+            return error_response(
+                error_message=f"Unsupported model: {request.model}",
+                detail_message=f"Model '{request.model}' không được hỗ trợ. Các model khả dụng: {', '.join(SUPPORTED_MODELS)}",
+                metadata={"requested_model": request.model, "supported_models": SUPPORTED_MODELS},
+                status_code=400,
+                show_traceback=False
             )
         
         max_connection_attempts = 3
@@ -238,9 +254,12 @@ def setup_routes(app, port_manager):
                 pass
             
             if attempt == max_connection_attempts - 1:
-                raise HTTPException(
+                return error_response(
+                    error_message="WebSocket connection failed after retries",
+                    detail_message="Không thể kết nối tới ZenTab extension. Vui lòng đảm bảo extension đang chạy và kết nối tới backend.",
+                    metadata={"max_attempts": max_connection_attempts, "websocket_port": WS_PORT},
                     status_code=503,
-                    detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
+                    show_traceback=False
                 )
             
             await asyncio.sleep(2)
@@ -252,25 +271,34 @@ def setup_routes(app, port_manager):
             available_tabs = await port_manager.request_fresh_tabs(timeout=10.0)
             
             if not available_tabs or len(available_tabs) == 0:
-                raise HTTPException(
+                return error_response(
+                    error_message="No available tabs for new task",
+                    detail_message="Không có tab DeepSeek nào khả dụng. Vui lòng mở ít nhất 1 tab DeepSeek trong ZenTab extension.",
+                    metadata={"is_new_task": True, "available_tabs_count": 0},
                     status_code=503,
-                    detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
+                    show_traceback=False
                 )
             
             selected_tab = available_tabs[0]
         else:
             if not folder_path:
-                raise HTTPException(
+                return error_response(
+                    error_message="Missing folder_path in request",
+                    detail_message="Không tìm thấy folder_path trong request. Vui lòng đảm bảo task context được bao gồm trong messages.",
+                    metadata={"is_new_task": False, "messages_count": len(request.messages)},
                     status_code=400,
-                    detail="Cannot find folder_path in request. Please ensure the task context is included."
+                    show_traceback=False
                 )
             
             folder_tabs = await port_manager.request_tabs_by_folder(folder_path, timeout=10.0)
             
             if not folder_tabs or len(folder_tabs) == 0:
-                raise HTTPException(
+                return error_response(
+                    error_message=f"No tabs linked to folder: {folder_path}",
+                    detail_message=f"Không có tab nào được liên kết với folder '{folder_path}'. Vui lòng bắt đầu một task mới trước.",
+                    metadata={"folder_path": folder_path, "is_new_task": False},
                     status_code=503,
-                    detail=f"No tabs linked to folder '{folder_path}'. Please start a new task first."
+                    show_traceback=False
                 )
             
             selected_tab = folder_tabs[0]
@@ -278,18 +306,24 @@ def setup_routes(app, port_manager):
         tab_id = selected_tab.get('tabId')
         
         if not tab_id or not isinstance(tab_id, int) or tab_id <= 0:
-            raise HTTPException(
+            return error_response(
+                error_message=f"Invalid tab ID from ZenTab: {tab_id}",
+                detail_message=f"Nhận được tab ID không hợp lệ từ ZenTab extension: {tab_id}",
+                metadata={"tab_id": tab_id, "tab_id_type": type(tab_id).__name__},
                 status_code=500,
-                detail=f"Invalid tab ID received from ZenTab: {tab_id}"
+                show_traceback=False
             )
         
         tab_status = selected_tab.get('status', 'unknown')
         can_accept = selected_tab.get('canAccept', False)
         
         if tab_status != 'free' or not can_accept:
-            raise HTTPException(
+            return error_response(
+                error_message=f"Tab not ready: status={tab_status}, can_accept={can_accept}",
+                detail_message=f"Tab không sẵn sàng nhận request. Trạng thái: {tab_status}, Có thể nhận: {can_accept}",
+                metadata={"tab_id": tab_id, "tab_status": tab_status, "can_accept": can_accept},
                 status_code=503,
-                detail=f"Tab is not ready to accept requests. Status: {tab_status}, Can accept: {can_accept}"
+                show_traceback=False
             )
 
         request_id = f"api-{uuid.uuid4().hex[:16]}"
@@ -298,7 +332,13 @@ def setup_routes(app, port_manager):
         user_messages = [msg for msg in request.messages if msg.role == "user"]
         
         if not user_messages:
-            raise HTTPException(status_code=400, detail="No user message found in request")
+            return error_response(
+                error_message="No user message in request",
+                detail_message="Không tìm thấy user message trong request. Request phải chứa ít nhất một message có role='user'.",
+                metadata={"total_messages": len(request.messages), "system_messages": len(system_messages)},
+                status_code=400,
+                show_traceback=False
+            )
 
         system_prompt = ""
         if is_new_task and system_messages:
@@ -345,7 +385,13 @@ def setup_routes(app, port_manager):
             await port_manager.websocket.send(json.dumps(ws_message))
         except Exception as e:
             port_manager.request_to_tab.pop(request_id, None)
-            raise HTTPException(status_code=500, detail=f"Failed to send prompt: {str(e)}")
+            return error_response(
+                error_message=f"Failed to send prompt to tab {tab_id}",
+                detail_message=f"Không thể gửi prompt tới tab. Lỗi: {str(e)}",
+                metadata={"tab_id": tab_id, "request_id": request_id, "error_type": type(e).__name__},
+                status_code=500,
+                show_traceback=True
+            )
         
         try:
             response = await port_manager.wait_for_response(request_id, REQUEST_TIMEOUT)
@@ -353,18 +399,48 @@ def setup_routes(app, port_manager):
             if "error" in response:
                 error_msg = response["error"]
                 if "cooling down" in error_msg.lower() or "not ready" in error_msg.lower():
-                    raise HTTPException(
+                    return error_response(
+                        error_message=f"Tab cooling down or not ready",
+                        detail_message=error_msg,
+                        metadata={"tab_id": tab_id, "request_id": request_id, "error_type": "cooling_down"},
                         status_code=503,
-                        detail=error_msg
+                        show_traceback=False
                     )
                 else:
-                    raise HTTPException(status_code=500, detail=error_msg)
+                    return error_response(
+                        error_message=f"Error from tab response",
+                        detail_message=error_msg,
+                        metadata={"tab_id": tab_id, "request_id": request_id},
+                        status_code=500,
+                        show_traceback=False
+                    )
             
             port_manager.mark_request_completed(request_id)
 
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=30.0))
             
             response = _validate_and_fix_response(response, request_id, is_fake=False)
+            
+            # 🆕 Log response thành công trước khi gửi về Cline
+            from core import info
+            info(
+                f"✅ Sending successful response to client",
+                {
+                    "response_id": response.get("id", "unknown"),
+                    "request_id": request_id,
+                    "tab_id": tab_id,
+                    "object_type": response.get("object", "unknown"),
+                    "finish_reason": response.get("choices", [{}])[0].get("finish_reason", "unknown") if response.get("choices") else "unknown",
+                    "content_length": len(response.get("choices", [{}])[0].get("message", {}).get("content", "")) if response.get("choices") else 0
+                }
+            )
+            
+            # 🆕 Print toàn bộ response JSON (pretty format) để debug
+            print(f"\n{'='*80}")
+            print(f"[SUCCESS RESPONSE JSON]")
+            print(f"{'='*80}")
+            print(json.dumps(response, indent=2, ensure_ascii=False))
+            print(f"{'='*80}\n")
             
             if response.get("object") == "chat.completion.chunk":
                 async def generate_real():
@@ -384,7 +460,14 @@ def setup_routes(app, port_manager):
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
             
             if he.status_code == 503:
-                raise
+                return error_response(
+                    error_message="Service unavailable",
+                    detail_message=he.detail if hasattr(he, 'detail') else "Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.",
+                    metadata={"tab_id": tab_id, "request_id": request_id, "status_code": 503},
+                    status_code=503,
+                    show_traceback=False
+                )
+
             else:
                 fallback_response = {
                     "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
@@ -414,7 +497,14 @@ def setup_routes(app, port_manager):
             
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
             
-            raise HTTPException(status_code=500, detail=str(e))
+            return error_response(
+                error_message=f"Unexpected error processing request",
+                detail_message=f"Đã xảy ra lỗi không mong muốn: {str(e)}",
+                metadata={"request_id": request_id, "error_type": type(e).__name__},
+                status_code=500,
+                show_traceback=True
+            )
+            
         finally:
             pass
     

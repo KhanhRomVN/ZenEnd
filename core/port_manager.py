@@ -5,6 +5,7 @@ import asyncio
 from typing import Dict, Optional, Tuple
 from fastapi import HTTPException
 from config.settings import WS_PORT
+from core.logger import error_response
 
 
 class PortManager:
@@ -84,6 +85,7 @@ class PortManager:
                 return False
                     
             except Exception as e:
+                print(f"[PortManager] ❌ Error in reconnect: {e}")
                 import traceback
                 traceback.print_exc()
                 return False
@@ -281,10 +283,12 @@ class PortManager:
             self.response_futures.pop(request_id, None)
             self.request_to_tab.pop(request_id, None)
             
-            from fastapi import HTTPException
-            raise HTTPException(
+            return error_response(
+                error_message=f"Request timeout after {timeout}s",
+                detail_message=f"Request đã timeout sau {timeout} giây. DeepSeek mất quá nhiều thời gian để phản hồi.",
+                metadata={"request_id": request_id, "timeout_seconds": timeout},
                 status_code=504,
-                detail=f"Request timeout after {timeout}s - DeepSeek took too long to respond"
+                show_traceback=False
             )
             
         except Exception as e:
