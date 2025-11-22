@@ -310,7 +310,13 @@ def setup_routes(app, port_manager):
         
         conn_status = port_manager.get_connection_status()
         
+        print(f"[Chat Completion] 🔌 Connection Status Check:")
+        print(f"[Chat Completion]    - websocket_connected: {conn_status.get('websocket_connected')}")
+        print(f"[Chat Completion]    - websocket_open: {conn_status.get('websocket_open')}")
+        print(f"[Chat Completion]    - Full status: {conn_status}")
+        
         if not conn_status.get('websocket_connected') or not conn_status.get('websocket_open'):
+            print(f"[Chat Completion] ❌ 503 ERROR: WebSocket not connected")
             raise HTTPException(
                 status_code=503,
                 detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
@@ -323,18 +329,28 @@ def setup_routes(app, port_manager):
         # Chọn tab dựa trên new task vs existing task
         if is_new_task:
             # New task: request tất cả tabs rảnh
+            print(f"[Chat Completion] 🆕 NEW TASK - Requesting fresh tabs...")
             available_tabs = await port_manager.request_fresh_tabs(timeout=10.0)
             
+            print(f"[Chat Completion] 📋 Fresh tabs response: {available_tabs}")
+            print(f"[Chat Completion] 📋 Tabs count: {len(available_tabs) if available_tabs else 0}")
+            
             if not available_tabs or len(available_tabs) == 0:
+                print(f"[Chat Completion] ❌ 503 ERROR: No fresh tabs available for NEW TASK")
                 raise HTTPException(
                     status_code=503,
                     detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
                 )
             
             selected_tab = available_tabs[0]
+            print(f"[Chat Completion] ✅ Selected fresh tab: {selected_tab}")
         else:
             # Existing task: tìm tab có folder_path khớp
+            print(f"[Chat Completion] 🔄 EXISTING TASK - Looking for tabs by folder...")
+            print(f"[Chat Completion] 📁 Folder path extracted: {folder_path}")
+            
             if not folder_path:
+                print(f"[Chat Completion] ❌ 400 ERROR: No folder_path found in request")
                 raise HTTPException(
                     status_code=400,
                     detail="Cannot find folder_path in request. Please ensure the task context is included."
@@ -342,13 +358,18 @@ def setup_routes(app, port_manager):
             
             folder_tabs = await port_manager.request_tabs_by_folder(folder_path, timeout=10.0)
             
+            print(f"[Chat Completion] 📋 Folder tabs response: {folder_tabs}")
+            print(f"[Chat Completion] 📋 Tabs count: {len(folder_tabs) if folder_tabs else 0}")
+            
             if not folder_tabs or len(folder_tabs) == 0:
+                print(f"[Chat Completion] ❌ 503 ERROR: No tabs linked to folder '{folder_path}'")
                 raise HTTPException(
                     status_code=503,
                     detail=f"No tabs linked to folder '{folder_path}'. Please start a new task first."
                 )
             
             selected_tab = folder_tabs[0]
+            print(f"[Chat Completion] ✅ Selected folder tab: {selected_tab}")
         
         tab_id = selected_tab.get('tabId')
         
@@ -371,7 +392,12 @@ def setup_routes(app, port_manager):
         tab_status = selected_tab.get('status', 'unknown')
         can_accept = selected_tab.get('canAccept', False)
         
+        print(f"[Chat Completion] 🔍 Tab validation:")
+        print(f"[Chat Completion]    - tab_status: {tab_status}")
+        print(f"[Chat Completion]    - can_accept: {can_accept}")
+        
         if tab_status != 'free' or not can_accept:
+            print(f"[Chat Completion] ❌ 503 ERROR: Tab not ready - status={tab_status}, canAccept={can_accept}")
             raise HTTPException(
                 status_code=503,
                 detail=f"Tab is not ready to accept requests. Status: {tab_status}, Can accept: {can_accept}"
