@@ -386,9 +386,10 @@ def setup_routes(app, port_manager):
         if not user_messages:
             raise HTTPException(status_code=400, detail="No user message found in request")
 
-        # Extract system prompt
+        # 🆕 CRITICAL: Chỉ extract system prompt KHI LÀ NEW TASK
+        # Existing task không cần system prompt vì DeepSeek đã có context
         system_prompt = ""
-        if system_messages:
+        if is_new_task and system_messages:
             system_content = system_messages[0].content
             if isinstance(system_content, str):
                 system_prompt = system_content
@@ -398,6 +399,10 @@ def setup_routes(app, port_manager):
                     if isinstance(item, dict) and item.get("type") == "text":
                         text_parts.append(item.get("text", ""))
                 system_prompt = "\n\n".join(text_parts)
+            
+            print(f"[Chat Completion] 📋 System Prompt: Included (NEW TASK - {len(system_prompt)} chars)")
+        else:
+            print(f"[Chat Completion] 📋 System Prompt: Skipped (EXISTING TASK - using conversation context)")
         
         # Extract user message
         raw_content = user_messages[-1].content
@@ -449,7 +454,10 @@ def setup_routes(app, port_manager):
         print("-"*80)
         print(f"[Chat Completion] 🆔 Request ID: {request_id}")
         print(f"[Chat Completion] 🔢 Target Tab: {tab_id}")
-        print(f"[Chat Completion] 📝 System Prompt: {len(system_prompt)} chars")
+        if is_new_task:
+            print(f"[Chat Completion] 📝 System Prompt: {len(system_prompt)} chars (NEW TASK)")
+        else:
+            print(f"[Chat Completion] 📝 System Prompt: Skipped (EXISTING TASK)")
         print(f"[Chat Completion] 💬 User Prompt: {len(user_prompt)} chars")
         print(f"[Chat Completion] 🏷️ Is New Task: {is_new_task}")
         
