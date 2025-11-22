@@ -308,19 +308,53 @@ def setup_routes(app, port_manager):
                 detail=f"Model '{request.model}' not supported. Available models: {', '.join(SUPPORTED_MODELS)}"
             )
         
-        conn_status = port_manager.get_connection_status()
-        
-        print(f"[Chat Completion] 🔌 Connection Status Check:")
-        print(f"[Chat Completion]    - websocket_connected: {conn_status.get('websocket_connected')}")
-        print(f"[Chat Completion]    - websocket_open: {conn_status.get('websocket_open')}")
-        print(f"[Chat Completion]    - Full status: {conn_status}")
-        
-        if not conn_status.get('websocket_connected') or not conn_status.get('websocket_open'):
-            print(f"[Chat Completion] ❌ 503 ERROR: WebSocket not connected")
-            raise HTTPException(
-                status_code=503,
-                detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
-            )
+        # 🆕 CRITICAL: Auto-reconnect logic
+        max_connection_attempts = 3
+        for attempt in range(max_connection_attempts):
+            conn_status = port_manager.get_connection_status()
+            
+            print(f"[Chat Completion] 🔌 Connection Check (attempt {attempt + 1}/{max_connection_attempts}):")
+            print(f"[Chat Completion]    - websocket_connected: {conn_status.get('websocket_connected')}")
+            print(f"[Chat Completion]    - websocket_open: {conn_status.get('websocket_open')}")
+            print(f"[Chat Completion]    - Full status: {conn_status}")
+            
+            # Nếu connection OK, break khỏi loop
+            if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
+                print(f"[Chat Completion] ✅ Connection OK")
+                break
+            
+            # Connection not OK, try reconnect
+            print(f"[Chat Completion] ⚠️ Connection not ready, attempting reconnect...")
+            
+            try:
+                # Gọi reconnect method của port_manager
+                await port_manager.reconnect_websocket()
+                print(f"[Chat Completion] ✅ Reconnect successful")
+                
+                # Đợi connection ổn định
+                await asyncio.sleep(1)
+                
+                # Verify lại connection
+                conn_status = port_manager.get_connection_status()
+                if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
+                    print(f"[Chat Completion] ✅ Connection verified after reconnect")
+                    break
+                else:
+                    print(f"[Chat Completion] ⚠️ Connection still not ready after reconnect")
+                    
+            except Exception as e:
+                print(f"[Chat Completion] ❌ Reconnect failed: {e}")
+            
+            # Nếu đây là attempt cuối cùng, raise error
+            if attempt == max_connection_attempts - 1:
+                print(f"[Chat Completion] ❌ 503 ERROR: WebSocket not connected after {max_connection_attempts} attempts")
+                raise HTTPException(
+                    status_code=503,
+                    detail="WebSocket not connected. Please ensure ZenTab extension is connected to backend."
+                )
+            
+            # Đợi trước khi retry
+            await asyncio.sleep(2)
         
         # Extract folder_path và detect new task
         folder_path = _extract_folder_path(request.messages)

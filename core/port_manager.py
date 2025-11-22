@@ -34,12 +34,74 @@ class PortManager:
         
         self.lock = asyncio.Lock()
         self.connection_time = 0
+        self.connection_start_time = 0
         
         self._initialized = True
         self._cleanup_task = None
         
         self.forwarded_messages: Dict[str, float] = {}
         self.message_processing_log: Dict[str, list] = {}
+    
+    async def reconnect_websocket(self):
+        """
+        Reconnect WebSocket connection
+        Note: Backend không tự connect, mà chờ extension reconnect
+        """
+        print("[PortManager] 🔄 Resetting WebSocket state and waiting for extension...")
+        
+        async with self.lock:
+            try:
+                # Đóng connection cũ nếu tồn tại
+                if self.websocket:
+                    try:
+                        # Check method close exists trước khi gọi
+                        if hasattr(self.websocket, 'close') and callable(self.websocket.close):
+                            # Check xem có đang open không
+                            if hasattr(self.websocket, 'state'):
+                                from websockets.protocol import State
+                                if self.websocket.state == State.OPEN:
+                                    await self.websocket.close()
+                                    print("[PortManager] 🔌 Closed old WebSocket connection")
+                            else:
+                                # Fallback: try to close anyway
+                                try:
+                                    await self.websocket.close()
+                                    print("[PortManager] 🔌 Closed old WebSocket connection")
+                                except:
+                                    pass
+                    except Exception as close_error:
+                        print(f"[PortManager] ⚠️ Could not close old connection: {close_error}")
+                
+                # DON'T reset websocket to None - extension is still connected!
+                # Just wait a bit for the connection to stabilize
+                print("[PortManager] ⏳ Waiting for connection to stabilize...")
+                await asyncio.sleep(1)
+                
+                # Check if websocket is still there and valid
+                if self.websocket:
+                    try:
+                        # Try to check connection state
+                        if hasattr(self.websocket, 'state'):
+                            from websockets.protocol import State
+                            if self.websocket.state == State.OPEN:
+                                print("[PortManager] ✅ WebSocket connection is healthy!")
+                                return True
+                        else:
+                            # If we can't check state, assume it's OK if object exists
+                            print("[PortManager] ✅ WebSocket object exists (assuming healthy)")
+                            return True
+                    except Exception as e:
+                        print(f"[PortManager] ⚠️ Error checking connection state: {e}")
+                
+                print("[PortManager] ⚠️ No valid WebSocket connection")
+                print("[PortManager] 💡 Extension may need to reconnect")
+                return False
+                    
+            except Exception as e:
+                print(f"[PortManager] ❌ Error in reconnect: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
 
     def mark_request_in_progress(self, request_id: str):
         self.requests_in_progress.add(request_id)
@@ -137,18 +199,31 @@ class PortManager:
         websocket_connected = False
         
         if self.websocket:
+            websocket_connected = True  # Có websocket object = connected
             try:
-                websocket_open = getattr(self.websocket, 'open', False)
-                websocket_connected = True
-            except Exception:
+                # Check if websocket is still open
+                # Different websocket libraries have different attributes
+                if hasattr(self.websocket, 'closed'):
+                    websocket_open = not self.websocket.closed
+                elif hasattr(self.websocket, 'open'):
+                    websocket_open = self.websocket.open
+                elif hasattr(self.websocket, 'state'):
+                    # For websockets.server.WebSocketServerProtocol
+                    from websockets.protocol import State
+                    websocket_open = self.websocket.state == State.OPEN
+                else:
+                    # Fallback: assume open if we have the object
+                    websocket_open = True
+                    
+            except Exception as e:
+                print(f"[PortManager] ⚠️ Error checking websocket status: {e}")
                 websocket_open = False
-                websocket_connected = False
                 
         status = {
             "websocket_connected": websocket_connected,
             "websocket_open": websocket_open,
             "port": self.port,
-            "connection_age": time.time() - self.connection_time if self.connection_time > 0 else 0
+            "connection_age": time.time() - self.connection_start_time if self.connection_start_time > 0 else 0
         }
         
         return status
@@ -157,6 +232,7 @@ class PortManager:
         async with self.lock:
             self.websocket = websocket
             self.connection_time = time.time()
+            self.connection_start_time = time.time()
     
     async def broadcast_status_update(self):
         if self.websocket:
@@ -262,8 +338,14 @@ class PortManager:
             return []
         
         try:
-            if self.websocket.closed:
-                return []
+            # Check websocket state properly
+            if hasattr(self.websocket, 'state'):
+                from websockets.protocol import State
+                if self.websocket.state != State.OPEN:
+                    return []
+            elif hasattr(self.websocket, 'closed'):
+                if self.websocket.closed:
+                    return []
         except Exception:
             return []
 
@@ -303,8 +385,14 @@ class PortManager:
             return []
         
         try:
-            if self.websocket.closed:
-                return []
+            # Check websocket state properly
+            if hasattr(self.websocket, 'state'):
+                from websockets.protocol import State
+                if self.websocket.state != State.OPEN:
+                    return []
+            elif hasattr(self.websocket, 'closed'):
+                if self.websocket.closed:
+                    return []
         except Exception:
             return []
 
