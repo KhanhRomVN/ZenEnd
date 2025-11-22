@@ -26,16 +26,13 @@ class WebSocketServer:
         self.total_connections += 1
         
         client_info = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
-        print(f"[WS Server:{self.port}] ✓ Client connected: {client_info} (total: {len(self.active_connections)})")
         
         try:
             await handle_websocket_connection(websocket, self.port_manager)
         except Exception as e:
             self.failed_connections += 1
-            print(f"[WS Server:{self.port}] ✗ Client error: {e}")
         finally:
             self.active_connections.discard(websocket)
-            print(f"[WS Server:{self.port}] ⊖ Client disconnected: {client_info} (remaining: {len(self.active_connections)})")
     
     async def health_monitor(self):
         """Monitor server health and log statistics"""
@@ -43,9 +40,6 @@ class WebSocketServer:
             try:
                 await asyncio.sleep(60)  # Check every minute
                 uptime = time.time() - self.start_time
-                print(f"[WS Server:{self.port}] 📊 Stats - Active: {len(self.active_connections)}, "
-                      f"Total: {self.total_connections}, Failed: {self.failed_connections}, "
-                      f"Uptime: {uptime:.0f}s")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -61,9 +55,7 @@ class WebSocketServer:
         health_task = asyncio.create_task(self.health_monitor())
         
         while retry_count < max_retries:
-            try:
-                print(f"[WS Server:{self.port}] Starting server on {WS_HOST}:{self.port}...")
-                
+            try:                
                 self.server = await websockets.serve(
                     self.handle_client,
                     WS_HOST,
@@ -75,7 +67,6 @@ class WebSocketServer:
                     compression=None       # Disable compression for better performance
                 )
                 
-                print(f"[WS Server:{self.port}] ✓ Server started successfully")
                 retry_count = 0  # Reset retry counter on success
                 
                 # Keep server running
@@ -83,34 +74,26 @@ class WebSocketServer:
                 
             except OSError as e:
                 if "Address already in use" in str(e):
-                    print(f"[WS Server:{self.port}] ✗ Port {self.port} already in use!")
                     break  # Don't retry on port conflicts
                 else:
                     retry_count += 1
                     delay = base_delay ** retry_count  # Exponential backoff: 2s, 4s, 8s, 16s, 32s
-                    print(f"[WS Server:{self.port}] ✗ Failed to start: {e}")
                     
                     if retry_count < max_retries:
-                        print(f"[WS Server:{self.port}] ⟳ Retrying in {delay}s... (attempt {retry_count}/{max_retries})")
                         await asyncio.sleep(delay)
                     else:
-                        print(f"[WS Server:{self.port}] ✗ Max retries reached, giving up")
                         break
                         
             except asyncio.CancelledError:
-                print(f"[WS Server:{self.port}] ⊗ Server shutdown requested")
                 break
                 
             except Exception as e:
                 retry_count += 1
                 delay = base_delay ** retry_count
-                print(f"[WS Server:{self.port}] ✗ Unexpected error: {e}")
                 
                 if retry_count < max_retries:
-                    print(f"[WS Server:{self.port}] ⟳ Retrying in {delay}s... (attempt {retry_count}/{max_retries})")
                     await asyncio.sleep(delay)
                 else:
-                    print(f"[WS Server:{self.port}] ✗ Max retries reached, giving up")
                     break
         
         # Cleanup
@@ -121,14 +104,11 @@ class WebSocketServer:
         
         # Close all active connections gracefully
         if self.active_connections:
-            print(f"[WS Server:{self.port}] Closing {len(self.active_connections)} active connections...")
             await asyncio.gather(
                 *[conn.close() for conn in self.active_connections],
                 return_exceptions=True
             )
-        
-        print(f"[WS Server:{self.port}] ⊗ Server stopped")
-    
+            
     def get_stats(self):
         """Get server statistics"""
         return {

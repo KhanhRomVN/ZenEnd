@@ -43,12 +43,6 @@ class PortManager:
         self.message_processing_log: Dict[str, list] = {}
     
     async def reconnect_websocket(self):
-        """
-        Reconnect WebSocket connection
-        Note: Backend không tự connect, mà chờ extension reconnect
-        """
-        print("[PortManager] 🔄 Resetting WebSocket state and waiting for extension...")
-        
         async with self.lock:
             try:
                 # Đóng connection cũ nếu tồn tại
@@ -61,20 +55,16 @@ class PortManager:
                                 from websockets.protocol import State
                                 if self.websocket.state == State.OPEN:
                                     await self.websocket.close()
-                                    print("[PortManager] 🔌 Closed old WebSocket connection")
                             else:
                                 # Fallback: try to close anyway
                                 try:
                                     await self.websocket.close()
-                                    print("[PortManager] 🔌 Closed old WebSocket connection")
                                 except:
                                     pass
                     except Exception as close_error:
                         print(f"[PortManager] ⚠️ Could not close old connection: {close_error}")
                 
                 # DON'T reset websocket to None - extension is still connected!
-                # Just wait a bit for the connection to stabilize
-                print("[PortManager] ⏳ Waiting for connection to stabilize...")
                 await asyncio.sleep(1)
                 
                 # Check if websocket is still there and valid
@@ -84,21 +74,16 @@ class PortManager:
                         if hasattr(self.websocket, 'state'):
                             from websockets.protocol import State
                             if self.websocket.state == State.OPEN:
-                                print("[PortManager] ✅ WebSocket connection is healthy!")
                                 return True
                         else:
                             # If we can't check state, assume it's OK if object exists
-                            print("[PortManager] ✅ WebSocket object exists (assuming healthy)")
                             return True
                     except Exception as e:
                         print(f"[PortManager] ⚠️ Error checking connection state: {e}")
                 
-                print("[PortManager] ⚠️ No valid WebSocket connection")
-                print("[PortManager] 💡 Extension may need to reconnect")
                 return False
                     
             except Exception as e:
-                print(f"[PortManager] ❌ Error in reconnect: {e}")
                 import traceback
                 traceback.print_exc()
                 return False

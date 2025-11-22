@@ -177,7 +177,6 @@ async def handle_websocket_message(data: dict, port_manager):
                                         # Decode escaped sequences
                                         decoded_content = raw_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
                                         choice[key]['content'] = decoded_content
-                                        print(f"[WebSocket] 🔧 Decoded escaped newlines in {key}.content")
                     
                 except json.JSONDecodeError:
                     # Fallback: nếu parse fail, dùng response_parser
