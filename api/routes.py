@@ -331,19 +331,6 @@ def setup_routes(app, port_manager):
                     detail="No tabs available. Please open DeepSeek tabs in ZenTab extension first."
                 )
             
-            # Nếu có folder_path, gửi WS để xóa liên kết cũ
-            if folder_path:
-                cleanup_msg = {
-                    "type": "cleanupFolderLink",
-                    "folderPath": folder_path,
-                    "timestamp": int(time.time() * 1000)
-                }
-                try:
-                    await port_manager.websocket.send(json.dumps(cleanup_msg))
-                    await asyncio.sleep(0.5)
-                except Exception:
-                    pass
-            
             selected_tab = available_tabs[0]
         else:
             # Existing task: tìm tab có folder_path khớp
@@ -391,19 +378,6 @@ def setup_routes(app, port_manager):
             )
 
         request_id = f"api-{uuid.uuid4().hex[:16]}"
-        
-        # 🆕 CRITICAL: Nếu là new task VÀ có folder_path → cleanup old links
-        if is_new_task and folder_path:
-            cleanup_msg = {
-                "type": "cleanupFolderLink",
-                "folderPath": folder_path,
-                "timestamp": int(time.time() * 1000)
-            }
-            try:
-                await port_manager.websocket.send(json.dumps(cleanup_msg))
-                await asyncio.sleep(0.5)
-            except Exception as cleanup_error:
-                pass
 
         # Extract BOTH system prompt and user messages
         system_messages = [msg for msg in request.messages if msg.role == "system"]
