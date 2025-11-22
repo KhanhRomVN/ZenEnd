@@ -205,26 +205,29 @@ class Logger:
                 metadata_str = f"\n\nChi tiết kỹ thuật:\n" + "\n".join(metadata_lines)
         
         # Tạo response content THEO FORMAT CLINE (giống attempt_completion thành công)
-        content = f"""Đã xảy ra lỗi trong quá trình xử lý yêu cầu
+        # Dùng emoji và Markdown để làm nổi bật, vì Cline không hỗ trợ ANSI colors
+        content = f"""
+🔴 **LOẠI LỖI:** `{error_type}` (HTTP {status_code})
 
-Loại lỗi: {error_type} (HTTP {status_code})
-
-Mô tả chi tiết:
+📋 **MÔ TẢ CHI TIẾT:**
 {detail_message}
 
-Thời gian: {time.strftime('%Y-%m-%d %H:%M:%S')}{metadata_str}
+🕐 **THỜI GIAN:** {time.strftime('%Y-%m-%d %H:%M:%S')}{metadata_str}
 
----
+💡 **KHUYẾN NGHỊ:**
+  • Kiểm tra lại yêu cầu và thử lại sau vài giây
+  • Đảm bảo ZenTab extension đang hoạt động và có tabs DeepSeek mở
+  • Kiểm tra log chi tiết trong terminal để biết thêm thông tin
+  • Nếu lỗi vẫn tiếp diễn, hãy restart ZenTab extension hoặc liên hệ hỗ trợ
 
-Khuyến nghị:
-- Vui lòng kiểm tra lại yêu cầu và thử lại
-- Nếu lỗi vẫn tiếp diễn, hãy kiểm tra log chi tiết hoặc liên hệ hỗ trợ
 <attempt_completion>
 <result>
-Lỗi: {error_type} - {detail_message}
+❌ **LỖI:** {error_type}
 
-Status Code: {status_code}
-Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}
+**Chi tiết:** {detail_message}
+
+**Status Code:** {status_code}  
+**Timestamp:** {time.strftime('%Y-%m-%d %H:%M:%S')}
 </result>
 </attempt_completion>"""
         
