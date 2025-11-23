@@ -5,7 +5,19 @@ from websockets.server import WebSocketServerProtocol
 import websockets
 
 async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_manager):
-    await port_manager.update_websocket(websocket)
+    """
+    Handle WebSocket connection với protection cho HEAD requests
+    """
+    # Check if this is a HEAD request (health check)
+    try:
+        # WebSocket handshake sẽ fail nếu là HEAD request
+        await port_manager.update_websocket(websocket)
+    except Exception as e:
+        # Ignore HEAD request errors từ health checks
+        if "HEAD" in str(e):
+            return
+        raise
+    
     ping_task = None
     
     try:

@@ -1,3 +1,4 @@
+import os
 import re
 import asyncio
 import time
@@ -7,7 +8,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Response
 
 def _extract_images_from_messages(messages: list) -> list[dict]:
     """
@@ -255,6 +256,26 @@ def setup_routes(app, port_manager):
                 }
             ]
         }
+
+    @router.get("/health")
+    async def health_check():
+        """
+        Health check endpoint cho Render.com
+        """
+        return {
+            "status": "healthy",
+            "service": "ZenEnd Backend", 
+            "version": "1.0.0",
+            "timestamp": int(time.time()),
+            "websocket_enabled": not os.getenv("RENDER")
+        }
+    
+    @router.head("/health")
+    async def health_check_head():
+        """
+        Handle HEAD requests từ Render health check
+        """
+        return Response(status_code=200)
 
     @router.post("/v1/chat/completions")
     async def chat_completions(

@@ -19,10 +19,25 @@ port_manager = PortManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ws_task = asyncio.create_task(start_websocket_server(WS_PORT, port_manager))
+    import os
+    
+    # CHỈ start WebSocket server khi chạy local (không phải production)
+    is_production = os.getenv("RENDER") is not None
+    
+    ws_task = None
+    if not is_production:
+        # Local development: Start WebSocket server
+        ws_task = asyncio.create_task(start_websocket_server(WS_PORT, port_manager))
     
     yield
-    ws_task.cancel()
+    
+    # Cleanup
+    if ws_task:
+        ws_task.cancel()
+        try:
+            await ws_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
