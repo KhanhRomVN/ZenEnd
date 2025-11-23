@@ -9,6 +9,44 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Header
 
+def _extract_images_from_messages(messages: list) -> list[dict]:
+    """
+    Extract tất cả images từ messages.
+    Trả về list các image objects với format: {type, data, format}
+    """
+    images = []
+    
+    for msg in messages:
+        content = msg.content
+        
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "image_url":
+                        image_url_data = item.get("image_url", {})
+                        
+                        if isinstance(image_url_data, dict):
+                            url = image_url_data.get("url", "")
+                        elif isinstance(image_url_data, str):
+                            url = image_url_data
+                        else:
+                            continue
+                        
+                        if url.startswith("data:image"):
+                            import re
+                            match = re.match(r'data:image/([a-zA-Z]+);base64,(.+)', url)
+                            if match:
+                                image_format = match.group(1)
+                                base64_data = match.group(2)
+                                
+                                images.append({
+                                    "type": "image_url",
+                                    "format": image_format,
+                                    "data": base64_data
+                                })
+    
+    return images
+
 def _extract_folder_path(messages: list) -> str | None:
     """
     Extract folder_path từ system/user messages.
@@ -176,7 +214,7 @@ from models import ChatCompletionRequest
 from .dependencies import verify_api_key
 import uuid
 import time
-from core import error_response
+from core import error_response, is_fake_mode_enabled, generate_fake_response
 
 router = APIRouter()
 
@@ -233,6 +271,61 @@ def setup_routes(app, port_manager):
                 metadata={"requested_model": request.model, "supported_models": SUPPORTED_MODELS},
                 status_code=400,
                 show_traceback=False
+            )
+        
+        # 🆕 CHECK FAKE MODE - Trả về fake response ngay nếu enabled
+        if is_fake_mode_enabled():
+            from core import info
+            from core.fake_response import FAKE_CONTENT
+            
+            request_id = f"fake-{uuid.uuid4().hex[:16]}"
+            
+            # Tạo full fake response với content
+            fake_response = {
+                "id": f"chatcmpl-{request_id}",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": "deepseek-chat",
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": FAKE_CONTENT
+                    },
+                    "finish_reason": "stop",
+                    "logprobs": None
+                }],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": len(FAKE_CONTENT.split()),
+                    "total_tokens": 100 + len(FAKE_CONTENT.split())
+                },
+                "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
+            }
+            
+            # Log fake response
+            info(
+                f"🎭 Sending FAKE response to client (Fake Mode Enabled)",
+                {
+                    "response_id": fake_response.get("id", "unknown"),
+                    "request_id": request_id,
+                    "fake_mode": True,
+                    "object_type": fake_response.get("object", "unknown"),
+                    "finish_reason": fake_response.get("choices", [{}])[0].get("finish_reason", "unknown") if fake_response.get("choices") else "unknown",
+                    "content_length": len(FAKE_CONTENT)
+                }
+            )
+            
+            # Print toàn bộ fake response JSON (pretty format) với FULL content
+            print(f"\n{'='*80}")
+            print(f"[FAKE RESPONSE JSON - FULL]")
+            print(f"{'='*80}")
+            print(json.dumps(fake_response, indent=2, ensure_ascii=False))
+            print(f"{'='*80}\n")
+            
+            return StreamingResponse(
+                generate_fake_response(),
+                media_type="text/event-stream"
             )
         
         max_connection_attempts = 3
@@ -312,6 +405,22 @@ def setup_routes(app, port_manager):
                 metadata={"tab_id": tab_id, "tab_id_type": type(tab_id).__name__},
                 status_code=500,
                 show_traceback=False
+            )
+        
+        # 🆕 EXTRACT IMAGES từ messages
+        images = _extract_images_from_messages(request.messages)
+        has_images = len(images) > 0
+        
+        if has_images:
+            from core import info
+            info(
+                f"📸 Extracted {len(images)} image(s) from request",
+                {
+                    "request_id": request_id,
+                    "tab_id": tab_id,
+                    "image_count": len(images),
+                    "image_formats": [img["format"] for img in images]
+                }
             )
         
         tab_status = selected_tab.get('status', 'unknown')

@@ -283,12 +283,11 @@ class PortManager:
             self.response_futures.pop(request_id, None)
             self.request_to_tab.pop(request_id, None)
             
-            return error_response(
-                error_message=f"Request timeout after {timeout}s",
-                detail_message=f"Request đã timeout sau {timeout} giây. DeepSeek mất quá nhiều thời gian để phản hồi.",
-                metadata={"request_id": request_id, "timeout_seconds": timeout},
+            # 🔥 FIX: Trả về dict error thay vì StreamingResponse
+            from fastapi import HTTPException
+            raise HTTPException(
                 status_code=504,
-                show_traceback=False
+                detail=f"Request đã timeout sau {timeout} giây. DeepSeek mất quá nhiều thời gian để phản hồi."
             )
             
         except Exception as e:
