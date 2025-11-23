@@ -490,6 +490,10 @@ def setup_routes(app, port_manager):
         if is_new_task and folder_path:
             ws_message["folderPath"] = folder_path
         
+        # 🆕 Thêm images vào message nếu có
+        if has_images:
+            ws_message["images"] = images
+        
         try:
             await port_manager.websocket.send(json.dumps(ws_message))
         except Exception as e:
