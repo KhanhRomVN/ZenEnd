@@ -66,12 +66,28 @@ async def generic_exception_handler(request, exc):
 setup_routes(app, port_manager)
 
 
+# if __name__ == "__main__":
+#     uvicorn.run(
+#         "main:app",
+#         host=HTTP_HOST,
+#         port=HTTP_PORT,
+#         log_level="info",
+#         reload=True,
+#         reload_dirs=["./"]
+#     )
+
 if __name__ == "__main__":
+    import os
+    
+    # Detect production environment
+    is_production = os.getenv("RENDER") is not None
+    port = int(os.getenv("PORT", HTTP_PORT))
+    
     uvicorn.run(
         "main:app",
         host=HTTP_HOST,
-        port=HTTP_PORT,
+        port=port,
         log_level="info",
-        reload=True,
-        reload_dirs=["./"]
+        reload=False if is_production else True,
+        reload_dirs=None if is_production else ["./"]
     )
