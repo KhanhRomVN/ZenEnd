@@ -2,6 +2,7 @@ import json
 import time
 import asyncio
 from websockets.server import WebSocketServerProtocol
+from starlette.websockets import WebSocketDisconnect
 import websockets
 
 async def handle_websocket_connection(websocket: WebSocketServerProtocol, port_manager):
@@ -224,12 +225,23 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
         # Ping task để keep-alive
         ping_task = None
         
+        # 🆕 Track last pong time để detect timeout
+        last_pong_time = time.time()
+        pong_timeout = 90  # 90 seconds - nếu không nhận pong thì close
+        
         async def send_ping():
+            nonlocal last_pong_time
             while port_manager.websocket == websocket:
                 try:
                     # FastAPI WebSocket dùng send_json thay vì send
                     await websocket.send_json({"type": "ping", "timestamp": time.time()})
-                    await asyncio.sleep(30)
+                    
+                    # 🆕 Check pong timeout
+                    if time.time() - last_pong_time > pong_timeout:
+                        print("[WebSocket] ❌ Pong timeout - closing connection")
+                        break
+                    
+                    await asyncio.sleep(45)  # 🆕 Changed from 30s to 45s
                 except Exception as e:
                     break
         
@@ -246,8 +258,17 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
                     message_count += 1
                     
                     data = json.loads(message)
+                    
+                    # 🆕 CRITICAL: Handle pong message trước
+                    if data.get("type") == "pong":
+                        last_pong_time = time.time()
+                        continue
                                         
                     await handle_websocket_message(data, port_manager)
+
+                except WebSocketDisconnect:
+                    # Client manually disconnected - graceful exit
+                    break
 
                 except json.JSONDecodeError as e:
                     pass
@@ -260,6 +281,9 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
                     import traceback
                     traceback.print_exc()
                     break
+        except WebSocketDisconnect:
+            # Client disconnected gracefully - no traceback needed
+            pass
         except Exception as loop_error:
             import traceback
             traceback.print_exc()
