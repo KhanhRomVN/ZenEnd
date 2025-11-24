@@ -77,13 +77,13 @@ async def websocket_endpoint(websocket: WebSocket):
     WebSocket endpoint cho ZenTab extension
     Chạy trên cùng port với HTTP API
     """
-    from websocket.handlers import handle_websocket_connection
+    from websocket.handlers import handle_fastapi_websocket_connection
     
     await websocket.accept()
     print(f"[WebSocket] ✅ Client connected from {websocket.client.host}:{websocket.client.port}")
     
     try:
-        await handle_websocket_connection(websocket, port_manager)
+        await handle_fastapi_websocket_connection(websocket, port_manager)
     except WebSocketDisconnect:
         print(f"[WebSocket] ❌ Client disconnected")
     except Exception as e:

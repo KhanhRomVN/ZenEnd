@@ -211,3 +211,59 @@ async def handle_websocket_message(data: dict, port_manager):
         port_manager.mark_request_completed(request_id)
         
         asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
+
+async def handle_fastapi_websocket_connection(websocket, port_manager):
+    """
+    Handle FastAPI WebSocket connection (KHÔNG dùng websockets.server.WebSocketServerProtocol)
+    Đây là adapter để bridge FastAPI WebSocket với logic hiện tại
+    """
+    try:
+        # Update port_manager với websocket mới
+        await port_manager.update_websocket(websocket)
+        
+        # Ping task để keep-alive
+        ping_task = None
+        
+        async def send_ping():
+            while port_manager.websocket == websocket:
+                try:
+                    # FastAPI WebSocket không có .ping() method
+                    # Thay vào đó, gửi ping message
+                    await websocket.send_json({"type": "ping", "timestamp": time.time()})
+                    await asyncio.sleep(30)
+                except Exception:
+                    break
+        
+        ping_task = asyncio.create_task(send_ping())
+        
+        # Listen for messages
+        try:
+            while True:
+                # FastAPI WebSocket dùng .receive_text() thay vì async for
+                try:
+                    message = await websocket.receive_text()
+                    data = json.loads(message)
+                    await handle_websocket_message(data, port_manager)
+                except json.JSONDecodeError:
+                    pass
+                except Exception as e:
+                    # Check if connection closed
+                    if "WebSocket" in str(e) and "closed" in str(e).lower():
+                        break
+                    pass
+        except Exception:
+            pass
+        
+    except Exception as e:
+        print(f"[FastAPI WS Handler] ❌ Error: {e}")
+    finally:
+        # Cleanup
+        if ping_task:
+            ping_task.cancel()
+            try:
+                await ping_task
+            except asyncio.CancelledError:
+                pass
+        
+        if port_manager.websocket == websocket:
+            port_manager.websocket = None
