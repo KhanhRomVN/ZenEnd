@@ -350,32 +350,43 @@ def setup_routes(app, port_manager):
             )
         
         max_connection_attempts = 3
-        for attempt in range(max_connection_attempts):
+        for attempt in range(1, max_connection_attempts + 1):
+            print(f"[API] 🔍 Connection check attempt {attempt}/{max_connection_attempts}")
             conn_status = port_manager.get_connection_status()
             
             if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
+                print(f"[API] ✅ WebSocket connection available")
                 break
             
+            print(f"[API] ⚠️ WebSocket not connected (connected={conn_status.get('websocket_connected')}, open={conn_status.get('websocket_open')})")
+            
             try:
-                await port_manager.reconnect_websocket()
-                await asyncio.sleep(1)
+                print(f"[API] 🔄 Triggering reconnect (will create NEW connection)...")
+                reconnect_success = await port_manager.reconnect_websocket(max_retries=3)
                 
-                conn_status = port_manager.get_connection_status()
-                if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
-                    break
+                if reconnect_success:
+                    print(f"[API] ✅ Reconnect successful")
+                    conn_status = port_manager.get_connection_status()
+                    if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
+                        break
+                else:
+                    print(f"[API] ❌ Reconnect failed")
                     
             except Exception as e:
+                print(f"[API] ❌ Reconnect exception: {e}")
                 pass
             
-            if attempt == max_connection_attempts - 1:
+            if attempt == max_connection_attempts:
+                print(f"[API] ❌ All {max_connection_attempts} connection attempts failed")
                 return error_response(
                     error_message="WebSocket connection failed after retries",
-                    detail_message="Không thể kết nối tới ZenTab extension. Vui lòng đảm bảo extension đang chạy và kết nối tới backend.",
+                    detail_message=f"Không thể kết nối tới ZenTab extension sau {max_connection_attempts} lần thử. Vui lòng đảm bảo extension đang chạy và kết nối tới backend.",
                     metadata={"max_attempts": max_connection_attempts, "backend_port": HTTP_PORT},
                     status_code=503,
                     show_traceback=False
                 )
             
+            print(f"[API] ⏳ Waiting 2s before next attempt...")
             await asyncio.sleep(2)
         
         folder_path = _extract_folder_path(request.messages)

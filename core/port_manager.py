@@ -41,52 +41,69 @@ class PortManager:
         self.forwarded_messages: Dict[str, float] = {}
         self.message_processing_log: Dict[str, list] = {}
     
-    async def reconnect_websocket(self):
+    async def reconnect_websocket(self, max_retries: int = 3):
+        """
+        Reconnect strategy: Tạo WS connection hoàn toàn mới (KHÔNG giữ phiên cũ)
+        
+        Args:
+            max_retries: Số lần retry tối đa (default: 3)
+            
+        Returns:
+            bool: True nếu reconnect thành công, False nếu thất bại
+        """
         async with self.lock:
-            try:
-                # Đóng connection cũ nếu tồn tại
-                if self.websocket:
-                    try:
-                        # Check method close exists trước khi gọi
-                        if hasattr(self.websocket, 'close') and callable(self.websocket.close):
-                            # Check xem có đang open không
-                            if hasattr(self.websocket, 'state'):
-                                from websockets.protocol import State
-                                if self.websocket.state == State.OPEN:
-                                    await self.websocket.close()
-                            else:
-                                # Fallback: try to close anyway
-                                try:
-                                    await self.websocket.close()
-                                except:
-                                    pass
-                    except Exception as close_error:
-                        print(f"[PortManager] ⚠️ Could not close old connection: {close_error}")
-                
-                # DON'T reset websocket to None - extension is still connected!
-                await asyncio.sleep(1)
-                
-                # Check if websocket is still there and valid
-                if self.websocket:
-                    try:
-                        # Try to check connection state
+            # Đóng và cleanup connection cũ hoàn toàn
+            if self.websocket:
+                try:
+                    if hasattr(self.websocket, 'close') and callable(self.websocket.close):
                         if hasattr(self.websocket, 'state'):
                             from websockets.protocol import State
                             if self.websocket.state == State.OPEN:
+                                await self.websocket.close()
+                        else:
+                            try:
+                                await self.websocket.close()
+                            except:
+                                pass
+                except Exception as close_error:
+                    print(f"[PortManager] ⚠️ Could not close old connection: {close_error}")
+                
+                # Reset websocket về None để chờ connection mới
+                self.websocket = None
+            
+            # Retry reconnect với connection mới
+            for attempt in range(1, max_retries + 1):
+                print(f"[PortManager] 🔄 Reconnect attempt {attempt}/{max_retries}...")
+                
+                try:
+                    # Đợi ZenTab extension tự động reconnect
+                    # (Extension sẽ tạo connection mới và gọi update_websocket)
+                    await asyncio.sleep(2)
+                    
+                    # Check xem đã có connection mới chưa
+                    if self.websocket:
+                        # Verify connection mới là OPEN
+                        if hasattr(self.websocket, 'state'):
+                            from websockets.protocol import State
+                            if self.websocket.state == State.OPEN:
+                                print(f"[PortManager] ✅ Reconnected successfully on attempt {attempt}")
                                 return True
                         else:
-                            # If we can't check state, assume it's OK if object exists
+                            # Fallback: assume OK nếu có websocket object
+                            print(f"[PortManager] ✅ Reconnected successfully on attempt {attempt}")
                             return True
-                    except Exception as e:
-                        print(f"[PortManager] ⚠️ Error checking connection state: {e}")
-                
-                return False
                     
-            except Exception as e:
-                print(f"[PortManager] ❌ Error in reconnect: {e}")
-                import traceback
-                traceback.print_exc()
-                return False
+                    # Chưa có connection mới, tiếp tục retry
+                    print(f"[PortManager] ⚠️ No new connection yet, retrying...")
+                    
+                except Exception as e:
+                    print(f"[PortManager] ❌ Reconnect attempt {attempt} failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Hết số lần retry
+            print(f"[PortManager] ❌ Failed to reconnect after {max_retries} attempts")
+            return False
 
     def mark_request_in_progress(self, request_id: str):
         self.requests_in_progress.add(request_id)

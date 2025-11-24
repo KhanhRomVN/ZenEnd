@@ -250,13 +250,15 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
                     print(f"[FastAPI WS Handler] ⚠️ Invalid JSON: {e}")
                     pass
                 except Exception as e:
-                    # Check if connection closed
+                    # Check if connection closed - break immediately
                     error_msg = str(e).lower()
-                    if "websocket" in error_msg and "close" in error_msg:
+                    if "disconnect" in error_msg or "closed" in error_msg or "cannot call" in error_msg:
                         print(f"[FastAPI WS Handler] 🔌 Connection closed by client")
                         break
+                    
+                    # Log other errors but also break to prevent spam
                     print(f"[FastAPI WS Handler] ⚠️ Receive error: {e}")
-                    pass
+                    break
         except Exception as loop_error:
             print(f"[FastAPI WS Handler] ❌ Message loop error: {loop_error}")
             pass
