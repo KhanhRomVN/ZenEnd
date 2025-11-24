@@ -41,9 +41,7 @@ class PortManager:
         self.forwarded_messages: Dict[str, float] = {}
         self.message_processing_log: Dict[str, list] = {}
     
-    async def reconnect_websocket(self, max_retries: int = 3):
-        print(f"[PortManager] ℹ️ Reconnect not needed - FastAPI WebSocket managed by client")
-        
+    async def reconnect_websocket(self, max_retries: int = 3):        
         # Simply check if we have a websocket object
         if self.websocket:
             return True
@@ -155,11 +153,6 @@ class PortManager:
                     from starlette.websockets import WebSocketState
                     websocket_open = self.websocket.client_state == WebSocketState.CONNECTED
                     
-                    # 🆕 LOG: Debug state check
-                    print(f"[PortManager] 🔍 WebSocket state check (FastAPI):")
-                    print(f"  → client_state: {self.websocket.client_state}")
-                    print(f"  → Is CONNECTED: {websocket_open}")
-                    
                 elif hasattr(self.websocket, 'closed'):
                     # Standard WebSocket
                     websocket_open = not self.websocket.closed
@@ -172,10 +165,8 @@ class PortManager:
                 else:
                     # Fallback: assume open if we have the object
                     websocket_open = True
-                    print(f"[PortManager] ⚠️ Unknown WebSocket type, assuming open")
                     
             except Exception as e:
-                print(f"[PortManager] ⚠️ Error checking websocket status: {e}")
                 import traceback
                 traceback.print_exc()
                 websocket_open = False
@@ -328,15 +319,8 @@ class PortManager:
                 "urgent": True
             }
             
-            # 🔥 CRITICAL FIX: Use send_text() for FastAPI WebSocket
-            print(f"[PortManager] 📤 Sending getAvailableTabs request:")
-            print(f"  → Request ID: {request_id}")
-            print(f"  → Message: {json.dumps(request_msg)}")
-            
             await self.websocket.send_text(json.dumps(request_msg))
             
-            print(f"[PortManager] ✅ Message sent, waiting for response...")
-
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
             
@@ -388,14 +372,7 @@ class PortManager:
                 "urgent": True
             }
             
-            # 🔥 CRITICAL FIX: Use send_text() for FastAPI WebSocket
-            print(f"[PortManager] 📤 Sending getTabsByFolder request:")
-            print(f"  → Request ID: {request_id}")
-            print(f"  → Folder Path: {folder_path}")
-            
             await self.websocket.send_text(json.dumps(request_msg))
-            
-            print(f"[PortManager] ✅ Message sent, waiting for response...")
 
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])

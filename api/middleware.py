@@ -104,18 +104,14 @@ class DebugRequestMiddleware(BaseHTTPMiddleware):
                                                             
                                                             with open(filename, 'wb') as f:
                                                                 f.write(image_bytes)
-                                                            
-                                                            print(f"[Middleware]   📸 Saved image: {filename} ({len(image_bytes)} bytes, format: {image_format})")
-                                                            
+                                                                                                                        
                                                             image_count += 1
-                                                        else:
-                                                            print(f"[Middleware]   ⚠️ Could not parse image data URL")
+
                                                     
                                                     except Exception as save_error:
                                                         print(f"[Middleware]   ❌ Failed to save image: {save_error}")
                                                 else:
                                                     extracted_texts.append(f"[IMAGE_URL_{image_count} - External URL]")
-                                                    print(f"[Middleware]   🔗 External image URL detected: {url[:100]}...")
                                                     image_count += 1
                                     
                                     if image_count > 0:

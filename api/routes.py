@@ -337,26 +337,12 @@ def setup_routes(app, port_manager):
                 }
             )
             
-            # Print toàn bộ fake response JSON (pretty format) với FULL content
-            print(f"\n{'='*80}")
-            print(f"[FAKE RESPONSE JSON - FULL]")
-            print(f"{'='*80}")
-            print(json.dumps(fake_response, indent=2, ensure_ascii=False))
-            print(f"{'='*80}\n")
-            
             return StreamingResponse(
                 generate_fake_response(),
                 media_type="text/event-stream"
             )
         
-        # 🔥 SIMPLIFIED: Chỉ check connection 1 lần
-        print(f"[API] 🔍 Checking WebSocket connection...")
         conn_status = port_manager.get_connection_status()
-        
-        print(f"[API] 📊 Connection status:")
-        print(f"  → Connected: {conn_status.get('websocket_connected')}")
-        print(f"  → Open: {conn_status.get('websocket_open')}")
-        print(f"  → Age: {conn_status.get('connection_age', 0):.1f}s")
         
         if not (conn_status.get('websocket_connected') and conn_status.get('websocket_open')):
             return error_response(
@@ -370,9 +356,7 @@ def setup_routes(app, port_manager):
                 status_code=503,
                 show_traceback=False
             )
-        
-        print(f"[API] ✅ WebSocket connection OK")
-        
+                
         folder_path = _extract_folder_path(request.messages)
         is_new_task = _detect_new_task(request.messages)
 
@@ -506,37 +490,19 @@ def setup_routes(app, port_manager):
         if is_new_task and folder_path:
             ws_message["folderPath"] = folder_path
         
-        # 🆕 LOG: Message chuẩn bị gửi
-        print(f"[API Route] 📤 Preparing to send message to ZenTab:")
-        print(f"  → Type: {ws_message['type']}")
-        print(f"  → Tab ID: {ws_message['tabId']}")
-        print(f"  → Request ID: {ws_message['requestId']}")
-        print(f"  → Is New Task: {ws_message['isNewTask']}")
-        print(f"  → System Prompt Length: {len(system_prompt)} chars")
-        print(f"  → User Prompt Length: {len(user_prompt)} chars")
-        print(f"  → Has Folder Path: {bool(folder_path)}")
-        
         # 🆕 Thêm images vào message nếu có
         if has_images:
             ws_message["images"] = images
         
         try:
             # 🆕 LOG: WebSocket state - FIXED
-            print(f"[API Route] 🔌 WebSocket status before send:")
-            print(f"  → WebSocket exists: {port_manager.websocket is not None}")
             if port_manager.websocket:
                 if hasattr(port_manager.websocket, 'client_state'):
                     from starlette.websockets import WebSocketState
-                    print(f"  → client_state: {port_manager.websocket.client_state}")
-                    print(f"  → Is CONNECTED: {port_manager.websocket.client_state == WebSocketState.CONNECTED}")
             
-            print(f"[API Route] 📨 Sending WebSocket message...")
             await port_manager.websocket.send_text(json.dumps(ws_message))
-            print(f"[API Route] ✅ WebSocket send completed successfully")
             
         except Exception as e:
-            print(f"[API Route] ❌ WebSocket send FAILED: {e}")
-            print(f"[API Route] 🔍 Exception type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
             
@@ -590,13 +556,6 @@ def setup_routes(app, port_manager):
                     "content_length": len(response.get("choices", [{}])[0].get("message", {}).get("content", "")) if response.get("choices") else 0
                 }
             )
-            
-            # 🆕 Print toàn bộ response JSON (pretty format) để debug
-            print(f"\n{'='*80}")
-            print(f"[SUCCESS RESPONSE JSON]")
-            print(f"{'='*80}")
-            print(json.dumps(response, indent=2, ensure_ascii=False))
-            print(f"{'='*80}\n")
             
             if response.get("object") == "chat.completion.chunk":
                 async def generate_real():

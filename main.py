@@ -80,14 +80,9 @@ async def generic_exception_handler(request, exc):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """
-    WebSocket endpoint cho ZenTab extension
-    CHỈ hoạt động khi có client kết nối (local development)
-    """
     from websocket.handlers import handle_fastapi_websocket_connection
     
     await websocket.accept()
-    print(f"[WebSocket] ✅ Client connected from {websocket.client.host}:{websocket.client.port}")
     
     try:
         await handle_fastapi_websocket_connection(websocket, port_manager)
@@ -105,15 +100,6 @@ setup_routes(app, port_manager)
 if __name__ == "__main__":
     is_production = os.getenv("RENDER") is not None
     port = int(os.getenv("PORT", HTTP_PORT))
-    
-    print(f"\n{'='*80}")
-    print(f"🚀 ZenEnd Backend Starting...")
-    print(f"{'='*80}")
-    print(f"Environment: {'Production (Render)' if is_production else 'Local Development'}")
-    print(f"HTTP API: http://{HTTP_HOST}:{port}")
-    print(f"WebSocket: ws://{HTTP_HOST}:{port}/ws")
-    print(f"    → ZenTab extension connects here (both prod & dev)")
-    print(f"{'='*80}\n")
     
     uvicorn.run(
         "main:app",

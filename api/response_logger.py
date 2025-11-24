@@ -93,9 +93,6 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
                 for issue, detected in issues.items():
                     status = "❌ DETECTED" if detected else "OK"
             
-            except Exception as e:
-                print(f"[ResponseLogger] ❌ Error parsing response: {e}")
-            
             # 🔧 CRITICAL: Return response with ORIGINAL content type and body
             # Chỉ xử lý JSONResponse (streaming đã được skip ở trên)
             return Response(
