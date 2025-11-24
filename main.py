@@ -38,6 +38,16 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# 🆕 CORS middleware cho WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (hoặc chỉ định cụ thể)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 from api.middleware import DebugRequestMiddleware
 app.add_middleware(DebugRequestMiddleware)
 

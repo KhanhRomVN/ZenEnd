@@ -214,12 +214,14 @@ async def handle_websocket_message(data: dict, port_manager):
 
 async def handle_fastapi_websocket_connection(websocket, port_manager):
     """
-    Handle FastAPI WebSocket connection (KHÔNG dùng websockets.server.WebSocketServerProtocol)
-    Đây là adapter để bridge FastAPI WebSocket với logic hiện tại
+    Handle FastAPI WebSocket connection
+    Adapter để bridge FastAPI WebSocket với logic hiện tại
     """
     try:
         # Update port_manager với websocket mới
         await port_manager.update_websocket(websocket)
+        
+        print(f"[FastAPI WS Handler] 📡 Connection established, starting message loop...")
         
         # Ping task để keep-alive
         ping_task = None
@@ -227,11 +229,11 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
         async def send_ping():
             while port_manager.websocket == websocket:
                 try:
-                    # FastAPI WebSocket không có .ping() method
-                    # Thay vào đó, gửi ping message
+                    # FastAPI WebSocket dùng send_json thay vì send
                     await websocket.send_json({"type": "ping", "timestamp": time.time()})
                     await asyncio.sleep(30)
-                except Exception:
+                except Exception as e:
+                    print(f"[FastAPI WS Handler] ⚠️ Ping failed: {e}")
                     break
         
         ping_task = asyncio.create_task(send_ping())
@@ -239,25 +241,33 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
         # Listen for messages
         try:
             while True:
-                # FastAPI WebSocket dùng .receive_text() thay vì async for
                 try:
+                    # Receive text message
                     message = await websocket.receive_text()
                     data = json.loads(message)
                     await handle_websocket_message(data, port_manager)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    print(f"[FastAPI WS Handler] ⚠️ Invalid JSON: {e}")
                     pass
                 except Exception as e:
                     # Check if connection closed
-                    if "WebSocket" in str(e) and "closed" in str(e).lower():
+                    error_msg = str(e).lower()
+                    if "websocket" in error_msg and "close" in error_msg:
+                        print(f"[FastAPI WS Handler] 🔌 Connection closed by client")
                         break
+                    print(f"[FastAPI WS Handler] ⚠️ Receive error: {e}")
                     pass
-        except Exception:
+        except Exception as loop_error:
+            print(f"[FastAPI WS Handler] ❌ Message loop error: {loop_error}")
             pass
         
     except Exception as e:
-        print(f"[FastAPI WS Handler] ❌ Error: {e}")
+        print(f"[FastAPI WS Handler] ❌ Handler error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         # Cleanup
+        print(f"[FastAPI WS Handler] 🧹 Cleaning up connection...")
         if ping_task:
             ping_task.cancel()
             try:
