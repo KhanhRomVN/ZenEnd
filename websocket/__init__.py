@@ -1,7 +1,5 @@
-from .handlers import handle_websocket_connection
-from .server import start_websocket_server
+from .handlers import handle_fastapi_websocket_connection
 
 __all__ = [
-    "handle_websocket_connection",
-    "start_websocket_server"
+    "handle_fastapi_websocket_connection"
 ]

@@ -4,7 +4,6 @@ import time
 import asyncio
 from typing import Dict, Optional, Tuple
 from fastapi import HTTPException
-from config.settings import WS_PORT
 from core.logger import error_response
 
 
@@ -25,7 +24,6 @@ class PortManager:
             return
             
         self.websocket: Optional[object] = None
-        self.port: int = WS_PORT
         
         self.response_futures: Dict[str, asyncio.Future] = {}
         self.request_to_tab: Dict[str, int] = {}
@@ -209,7 +207,6 @@ class PortManager:
         status = {
             "websocket_connected": websocket_connected,
             "websocket_open": websocket_open,
-            "port": self.port,
             "connection_age": time.time() - self.connection_start_time if self.connection_start_time > 0 else 0
         }
         

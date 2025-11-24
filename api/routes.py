@@ -210,7 +210,7 @@ def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = 
     
     return clean_response
 
-from config.settings import REQUEST_TIMEOUT, WS_PORT, WS_HOST
+from config.settings import REQUEST_TIMEOUT, HTTP_PORT
 from models import ChatCompletionRequest
 from .dependencies import verify_api_key
 import uuid
@@ -371,7 +371,7 @@ def setup_routes(app, port_manager):
                 return error_response(
                     error_message="WebSocket connection failed after retries",
                     detail_message="Không thể kết nối tới ZenTab extension. Vui lòng đảm bảo extension đang chạy và kết nối tới backend.",
-                    metadata={"max_attempts": max_connection_attempts, "websocket_port": WS_PORT},
+                    metadata={"max_attempts": max_connection_attempts, "backend_port": HTTP_PORT},
                     status_code=503,
                     show_traceback=False
                 )
