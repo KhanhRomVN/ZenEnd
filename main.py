@@ -1,42 +1,34 @@
 """
 ZenEnd Backend - Main Server
-Chạy 10 WebSocket servers (1501-1510) và HTTP API để bridge với ZenTab
+Chạy HTTP API và WebSocket trên CÙNG PORT (Render-compatible)
 """
 
 import asyncio
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
 
-from config.settings import WS_PORT, HTTP_PORT, HTTP_HOST, API_KEY
+from config.settings import HTTP_PORT, HTTP_HOST, API_KEY
 from core import PortManager
 from api.routes import setup_routes
-from websocket import start_websocket_server
 
 port_manager = PortManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import os
-    
-    # CHỈ start WebSocket server khi chạy local (không phải production)
-    is_production = os.getenv("RENDER") is not None
-    
-    ws_task = None
-    if not is_production:
-        # Local development: Start WebSocket server
-        ws_task = asyncio.create_task(start_websocket_server(WS_PORT, port_manager))
-    
+    """
+    Lifespan manager - Không cần start WebSocket server riêng nữa
+    Vì WebSocket sẽ chạy trực tiếp trên FastAPI
+    """
     yield
     
     # Cleanup
-    if ws_task:
-        ws_task.cancel()
+    if port_manager.websocket:
         try:
-            await ws_task
-        except asyncio.CancelledError:
+            await port_manager.websocket.close()
+        except:
             pass
 
 
@@ -78,18 +70,31 @@ async def generic_exception_handler(request, exc):
         }
     )
 
+# ✅ WebSocket endpoint trực tiếp trên FastAPI
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint cho ZenTab extension
+    Chạy trên cùng port với HTTP API
+    """
+    from websocket.handlers import handle_websocket_connection
+    
+    await websocket.accept()
+    print(f"[WebSocket] ✅ Client connected from {websocket.client.host}:{websocket.client.port}")
+    
+    try:
+        await handle_websocket_connection(websocket, port_manager)
+    except WebSocketDisconnect:
+        print(f"[WebSocket] ❌ Client disconnected")
+    except Exception as e:
+        print(f"[WebSocket] ❌ Error: {e}")
+    finally:
+        if port_manager.websocket == websocket:
+            port_manager.websocket = None
+
+# Setup HTTP routes
 setup_routes(app, port_manager)
 
-
-# if __name__ == "__main__":
-#     uvicorn.run(
-#         "main:app",
-#         host=HTTP_HOST,
-#         port=HTTP_PORT,
-#         log_level="info",
-#         reload=True,
-#         reload_dirs=["./"]
-#     )
 
 if __name__ == "__main__":
     import os
@@ -97,6 +102,14 @@ if __name__ == "__main__":
     # Detect production environment
     is_production = os.getenv("RENDER") is not None
     port = int(os.getenv("PORT", HTTP_PORT))
+    
+    print(f"\n{'='*80}")
+    print(f"🚀 ZenEnd Backend Starting...")
+    print(f"{'='*80}")
+    print(f"Environment: {'Production (Render)' if is_production else 'Local Development'}")
+    print(f"HTTP API: http://{HTTP_HOST}:{port}")
+    print(f"WebSocket: {'wss' if is_production else 'ws'}://{HTTP_HOST if not is_production else 'your-app.onrender.com'}:{port}/ws")
+    print(f"{'='*80}\n")
     
     uvicorn.run(
         "main:app",
