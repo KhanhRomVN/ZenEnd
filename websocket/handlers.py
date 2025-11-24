@@ -240,14 +240,37 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
         
         # Listen for messages
         try:
+            print(f"[FastAPI WS Handler] 🎧 Starting message listening loop...")
+            message_count = 0
+            
             while True:
                 try:
+                    # 🆕 LOG: Đang chờ message
+                    print(f"[FastAPI WS Handler] ⏳ Waiting for message (count: {message_count})...")
+                    
                     # Receive text message
                     message = await websocket.receive_text()
+                    message_count += 1
+                    
+                    # 🆕 LOG: Nhận được message
+                    print(f"[FastAPI WS Handler] 📩 Message #{message_count} received:")
+                    print(f"  → Raw length: {len(message)} bytes")
+                    print(f"  → First 200 chars: {message[:200]}")
+                    
                     data = json.loads(message)
+                    
+                    # 🆕 LOG: Parse thành công
+                    print(f"  → Parsed type: {data.get('type', 'unknown')}")
+                    print(f"  → Keys: {list(data.keys())}")
+                    
                     await handle_websocket_message(data, port_manager)
+                    
+                    # 🆕 LOG: Xử lý xong
+                    print(f"[FastAPI WS Handler] ✅ Message #{message_count} handled")
+                    
                 except json.JSONDecodeError as e:
                     print(f"[FastAPI WS Handler] ⚠️ Invalid JSON: {e}")
+                    print(f"  → Raw message: {message[:500]}")
                     pass
                 except Exception as e:
                     # Check if connection closed - break immediately
@@ -258,9 +281,14 @@ async def handle_fastapi_websocket_connection(websocket, port_manager):
                     
                     # Log other errors but also break to prevent spam
                     print(f"[FastAPI WS Handler] ⚠️ Receive error: {e}")
+                    print(f"  → Error type: {type(e).__name__}")
+                    import traceback
+                    traceback.print_exc()
                     break
         except Exception as loop_error:
             print(f"[FastAPI WS Handler] ❌ Message loop error: {loop_error}")
+            import traceback
+            traceback.print_exc()
             pass
         
     except Exception as e:

@@ -124,18 +124,29 @@ class DebugRequestMiddleware(BaseHTTPMiddleware):
                 except Exception as e:
                     print(f"[Middleware]   - Parse error: {e}")
             
-            # CRITICAL FIX: Tạo lại request với body stream mới
+            # CRITICAL FIX: Tạo lại request với body stream mới - PROPER WAY
+            chunk_index = 0
+            
             async def new_receive():
-                # Return chunks đã đọc
-                for chunk in chunks:
-                    yield {
+                nonlocal chunk_index
+                if chunk_index < len(chunks):
+                    chunk = chunks[chunk_index]
+                    chunk_index += 1
+                    return {
                         "type": "http.request",
                         "body": chunk,
+                        "more_body": chunk_index < len(chunks)
+                    }
+                else:
+                    # End of stream
+                    return {
+                        "type": "http.request",
+                        "body": b"",
                         "more_body": False
                     }
             
             # Replace request stream
-            request._receive = new_receive().__anext__
+            request._receive = new_receive
         
         response = await call_next(request)
         return response

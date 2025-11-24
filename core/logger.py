@@ -263,7 +263,7 @@ class Logger:
         
         # Trả về SSE stream format giống response thành công
         async def generate_error():
-            # Yield từng chunk riêng biệt với delay nhỏ
+            # Yield từng chunk riêng biệt
             yield f"data: {json.dumps(response)}\n\n".encode('utf-8')
             yield "data: [DONE]\n\n".encode('utf-8')
         

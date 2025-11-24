@@ -24,17 +24,14 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/v1/chat/completions":
             response = await call_next(request)
             
-            # 🔧 FIX: Xử lý cả JSONResponse và StreamingResponse
-            body_bytes = b""
-            
-            # Kiểm tra nếu response có body_iterator
+            # 🔧 FIX: SKIP streaming responses để tránh consume body_iterator
             if hasattr(response, 'body_iterator'):
-                chunks = []
-                async for chunk in response.body_iterator:
-                    chunks.append(chunk)
-                    body_bytes += chunk
-            # Nếu là JSONResponse thông thường (có body)
-            elif hasattr(response, 'body'):
+                # Đây là StreamingResponse - KHÔNG consume iterator
+                return response
+            
+            # Chỉ xử lý JSONResponse thông thường
+            body_bytes = b""
+            if hasattr(response, 'body'):
                 body_bytes = response.body
                 chunks = [body_bytes]
             else:
@@ -100,26 +97,13 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
                 print(f"[ResponseLogger] ❌ Error parsing response: {e}")
             
             # 🔧 CRITICAL: Return response with ORIGINAL content type and body
-            # Nếu là streaming response
-            if hasattr(response, 'body_iterator'):
-                async def new_body_iterator():
-                    for chunk in chunks:
-                        yield chunk
-
-                return Response(
-                    content=body_bytes,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type=response.media_type
-                )
-            # Nếu là JSONResponse thông thường
-            else:
-                return Response(
-                    content=body_bytes,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type=response.media_type or "application/json"
-                )
+            # Chỉ xử lý JSONResponse (streaming đã được skip ở trên)
+            return Response(
+                content=body_bytes,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.media_type or "application/json"
+            )
         
         # For other routes, just proceed normally
         return await call_next(request)

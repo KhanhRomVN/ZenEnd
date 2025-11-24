@@ -349,45 +349,29 @@ def setup_routes(app, port_manager):
                 media_type="text/event-stream"
             )
         
-        max_connection_attempts = 3
-        for attempt in range(1, max_connection_attempts + 1):
-            print(f"[API] 🔍 Connection check attempt {attempt}/{max_connection_attempts}")
-            conn_status = port_manager.get_connection_status()
-            
-            if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
-                print(f"[API] ✅ WebSocket connection available")
-                break
-            
-            print(f"[API] ⚠️ WebSocket not connected (connected={conn_status.get('websocket_connected')}, open={conn_status.get('websocket_open')})")
-            
-            try:
-                print(f"[API] 🔄 Triggering reconnect (will create NEW connection)...")
-                reconnect_success = await port_manager.reconnect_websocket(max_retries=3)
-                
-                if reconnect_success:
-                    print(f"[API] ✅ Reconnect successful")
-                    conn_status = port_manager.get_connection_status()
-                    if conn_status.get('websocket_connected') and conn_status.get('websocket_open'):
-                        break
-                else:
-                    print(f"[API] ❌ Reconnect failed")
-                    
-            except Exception as e:
-                print(f"[API] ❌ Reconnect exception: {e}")
-                pass
-            
-            if attempt == max_connection_attempts:
-                print(f"[API] ❌ All {max_connection_attempts} connection attempts failed")
-                return error_response(
-                    error_message="WebSocket connection failed after retries",
-                    detail_message=f"Không thể kết nối tới ZenTab extension sau {max_connection_attempts} lần thử. Vui lòng đảm bảo extension đang chạy và kết nối tới backend.",
-                    metadata={"max_attempts": max_connection_attempts, "backend_port": HTTP_PORT},
-                    status_code=503,
-                    show_traceback=False
-                )
-            
-            print(f"[API] ⏳ Waiting 2s before next attempt...")
-            await asyncio.sleep(2)
+        # 🔥 SIMPLIFIED: Chỉ check connection 1 lần
+        print(f"[API] 🔍 Checking WebSocket connection...")
+        conn_status = port_manager.get_connection_status()
+        
+        print(f"[API] 📊 Connection status:")
+        print(f"  → Connected: {conn_status.get('websocket_connected')}")
+        print(f"  → Open: {conn_status.get('websocket_open')}")
+        print(f"  → Age: {conn_status.get('connection_age', 0):.1f}s")
+        
+        if not (conn_status.get('websocket_connected') and conn_status.get('websocket_open')):
+            return error_response(
+                error_message="WebSocket not connected",
+                detail_message="ZenTab extension chưa kết nối tới backend. Vui lòng đảm bảo extension đang chạy và đã connect tới WebSocket.",
+                metadata={
+                    "websocket_connected": conn_status.get('websocket_connected'),
+                    "websocket_open": conn_status.get('websocket_open'),
+                    "backend_port": HTTP_PORT
+                },
+                status_code=503,
+                show_traceback=False
+            )
+        
+        print(f"[API] ✅ WebSocket connection OK")
         
         folder_path = _extract_folder_path(request.messages)
         is_new_task = _detect_new_task(request.messages)
@@ -522,13 +506,40 @@ def setup_routes(app, port_manager):
         if is_new_task and folder_path:
             ws_message["folderPath"] = folder_path
         
+        # 🆕 LOG: Message chuẩn bị gửi
+        print(f"[API Route] 📤 Preparing to send message to ZenTab:")
+        print(f"  → Type: {ws_message['type']}")
+        print(f"  → Tab ID: {ws_message['tabId']}")
+        print(f"  → Request ID: {ws_message['requestId']}")
+        print(f"  → Is New Task: {ws_message['isNewTask']}")
+        print(f"  → System Prompt Length: {len(system_prompt)} chars")
+        print(f"  → User Prompt Length: {len(user_prompt)} chars")
+        print(f"  → Has Folder Path: {bool(folder_path)}")
+        
         # 🆕 Thêm images vào message nếu có
         if has_images:
             ws_message["images"] = images
         
         try:
-            await port_manager.websocket.send(json.dumps(ws_message))
+            # 🆕 LOG: WebSocket state - FIXED
+            print(f"[API Route] 🔌 WebSocket status before send:")
+            print(f"  → WebSocket exists: {port_manager.websocket is not None}")
+            if port_manager.websocket:
+                if hasattr(port_manager.websocket, 'client_state'):
+                    from starlette.websockets import WebSocketState
+                    print(f"  → client_state: {port_manager.websocket.client_state}")
+                    print(f"  → Is CONNECTED: {port_manager.websocket.client_state == WebSocketState.CONNECTED}")
+            
+            print(f"[API Route] 📨 Sending WebSocket message...")
+            await port_manager.websocket.send_text(json.dumps(ws_message))
+            print(f"[API Route] ✅ WebSocket send completed successfully")
+            
         except Exception as e:
+            print(f"[API Route] ❌ WebSocket send FAILED: {e}")
+            print(f"[API Route] 🔍 Exception type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            
             port_manager.request_to_tab.pop(request_id, None)
             return error_response(
                 error_message=f"Failed to send prompt to tab {tab_id}",
@@ -589,8 +600,11 @@ def setup_routes(app, port_manager):
             
             if response.get("object") == "chat.completion.chunk":
                 async def generate_real():
-                    yield f"data: {json.dumps(response)}\n\n"
-                    yield "data: [DONE]\n\n"
+                    try:
+                        yield f"data: {json.dumps(response)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as gen_error:
+                        print(f"[API Route] ❌ Generator error: {gen_error}")
                 
                 return StreamingResponse(
                     generate_real(),

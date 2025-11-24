@@ -42,67 +42,12 @@ class PortManager:
         self.message_processing_log: Dict[str, list] = {}
     
     async def reconnect_websocket(self, max_retries: int = 3):
-        """
-        Reconnect strategy: Tạo WS connection hoàn toàn mới (KHÔNG giữ phiên cũ)
+        print(f"[PortManager] ℹ️ Reconnect not needed - FastAPI WebSocket managed by client")
         
-        Args:
-            max_retries: Số lần retry tối đa (default: 3)
-            
-        Returns:
-            bool: True nếu reconnect thành công, False nếu thất bại
-        """
-        async with self.lock:
-            # Đóng và cleanup connection cũ hoàn toàn
-            if self.websocket:
-                try:
-                    if hasattr(self.websocket, 'close') and callable(self.websocket.close):
-                        if hasattr(self.websocket, 'state'):
-                            from websockets.protocol import State
-                            if self.websocket.state == State.OPEN:
-                                await self.websocket.close()
-                        else:
-                            try:
-                                await self.websocket.close()
-                            except:
-                                pass
-                except Exception as close_error:
-                    print(f"[PortManager] ⚠️ Could not close old connection: {close_error}")
-                
-                # Reset websocket về None để chờ connection mới
-                self.websocket = None
-            
-            # Retry reconnect với connection mới
-            for attempt in range(1, max_retries + 1):
-                print(f"[PortManager] 🔄 Reconnect attempt {attempt}/{max_retries}...")
-                
-                try:
-                    # Đợi ZenTab extension tự động reconnect
-                    # (Extension sẽ tạo connection mới và gọi update_websocket)
-                    await asyncio.sleep(2)
-                    
-                    # Check xem đã có connection mới chưa
-                    if self.websocket:
-                        # Verify connection mới là OPEN
-                        if hasattr(self.websocket, 'state'):
-                            from websockets.protocol import State
-                            if self.websocket.state == State.OPEN:
-                                print(f"[PortManager] ✅ Reconnected successfully on attempt {attempt}")
-                                return True
-                        else:
-                            # Fallback: assume OK nếu có websocket object
-                            print(f"[PortManager] ✅ Reconnected successfully on attempt {attempt}")
-                            return True
-                    
-                    # Chưa có connection mới, tiếp tục retry
-                    print(f"[PortManager] ⚠️ No new connection yet, retrying...")
-                    
-                except Exception as e:
-                    print(f"[PortManager] ❌ Reconnect attempt {attempt} failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-            
-            # Hết số lần retry
-            print(f"[PortManager] ❌ Failed to reconnect after {max_retries} attempts")
+        # Simply check if we have a websocket object
+        if self.websocket:
+            return True
+        else:
             return False
 
     def mark_request_in_progress(self, request_id: str):
@@ -201,24 +146,38 @@ class PortManager:
         websocket_connected = False
         
         if self.websocket:
-            websocket_connected = True  # Có websocket object = connected
+            websocket_connected = True
             try:
-                # Check if websocket is still open
-                # Different websocket libraries have different attributes
-                if hasattr(self.websocket, 'closed'):
+                # 🔥 CRITICAL FIX: FastAPI WebSocket check
+                # FastAPI WebSocket uses client_state and application_state
+                if hasattr(self.websocket, 'client_state'):
+                    # FastAPI WebSocket
+                    from starlette.websockets import WebSocketState
+                    websocket_open = self.websocket.client_state == WebSocketState.CONNECTED
+                    
+                    # 🆕 LOG: Debug state check
+                    print(f"[PortManager] 🔍 WebSocket state check (FastAPI):")
+                    print(f"  → client_state: {self.websocket.client_state}")
+                    print(f"  → Is CONNECTED: {websocket_open}")
+                    
+                elif hasattr(self.websocket, 'closed'):
+                    # Standard WebSocket
                     websocket_open = not self.websocket.closed
                 elif hasattr(self.websocket, 'open'):
                     websocket_open = self.websocket.open
                 elif hasattr(self.websocket, 'state'):
-                    # For websockets.server.WebSocketServerProtocol
+                    # websockets library
                     from websockets.protocol import State
                     websocket_open = self.websocket.state == State.OPEN
                 else:
                     # Fallback: assume open if we have the object
                     websocket_open = True
+                    print(f"[PortManager] ⚠️ Unknown WebSocket type, assuming open")
                     
             except Exception as e:
                 print(f"[PortManager] ⚠️ Error checking websocket status: {e}")
+                import traceback
+                traceback.print_exc()
                 websocket_open = False
                 
         status = {
@@ -341,7 +300,12 @@ class PortManager:
         
         try:
             # Check websocket state properly
-            if hasattr(self.websocket, 'state'):
+            if hasattr(self.websocket, 'client_state'):
+                # FastAPI WebSocket
+                from starlette.websockets import WebSocketState
+                if self.websocket.client_state != WebSocketState.CONNECTED:
+                    return []
+            elif hasattr(self.websocket, 'state'):
                 from websockets.protocol import State
                 if self.websocket.state != State.OPEN:
                     return []
@@ -364,7 +328,14 @@ class PortManager:
                 "urgent": True
             }
             
-            await self.websocket.send(json.dumps(request_msg))
+            # 🔥 CRITICAL FIX: Use send_text() for FastAPI WebSocket
+            print(f"[PortManager] 📤 Sending getAvailableTabs request:")
+            print(f"  → Request ID: {request_id}")
+            print(f"  → Message: {json.dumps(request_msg)}")
+            
+            await self.websocket.send_text(json.dumps(request_msg))
+            
+            print(f"[PortManager] ✅ Message sent, waiting for response...")
 
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
@@ -388,7 +359,12 @@ class PortManager:
         
         try:
             # Check websocket state properly
-            if hasattr(self.websocket, 'state'):
+            if hasattr(self.websocket, 'client_state'):
+                # FastAPI WebSocket
+                from starlette.websockets import WebSocketState
+                if self.websocket.client_state != WebSocketState.CONNECTED:
+                    return []
+            elif hasattr(self.websocket, 'state'):
                 from websockets.protocol import State
                 if self.websocket.state != State.OPEN:
                     return []
@@ -412,7 +388,14 @@ class PortManager:
                 "urgent": True
             }
             
-            await self.websocket.send(json.dumps(request_msg))
+            # 🔥 CRITICAL FIX: Use send_text() for FastAPI WebSocket
+            print(f"[PortManager] 📤 Sending getTabsByFolder request:")
+            print(f"  → Request ID: {request_id}")
+            print(f"  → Folder Path: {folder_path}")
+            
+            await self.websocket.send_text(json.dumps(request_msg))
+            
+            print(f"[PortManager] ✅ Message sent, waiting for response...")
 
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
