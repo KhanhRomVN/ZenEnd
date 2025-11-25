@@ -64,9 +64,9 @@ async def generate_fake_response():
             "logprobs": None
         }],
         "usage": {
-            "prompt_tokens": 100,
+            "prompt_tokens": 10000,
             "completion_tokens": len(FAKE_CONTENT.split()),
-            "total_tokens": 100 + len(FAKE_CONTENT.split())
+            "total_tokens": 1000 + len(FAKE_CONTENT.split())
         },
         "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
     }

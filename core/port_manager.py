@@ -284,7 +284,7 @@ class PortManager:
     async def request_fresh_tabs(self, timeout: float = 10.0) -> list:
         """
         Request danh sách tabs rảnh từ ZenTab extension
-        Tăng timeout lên 10s để đảm bảo đủ thời gian cho ZenTab phản hồi
+        🔥 FIX: Chỉ trả về tabs có canAccept=true và status=free
         """
         if not self.websocket:
             return []
@@ -324,7 +324,13 @@ class PortManager:
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
             
-            return tabs
+            # 🔥 CRITICAL FIX: Chỉ trả tabs THỰC SỰ rảnh (canAccept=true và status=free)
+            free_tabs = [
+                tab for tab in tabs 
+                if tab.get('canAccept', False) and tab.get('status') == 'free'
+            ]
+            
+            return free_tabs
             
         except asyncio.TimeoutError:
             return []
@@ -336,7 +342,7 @@ class PortManager:
     async def request_tabs_by_folder(self, folder_path: str, timeout: float = 10.0) -> list:
         """
         Request danh sách tabs có folder_path khớp từ ZenTab.
-        Dùng cho các request KHÔNG phải new task.
+        🔥 FIX: Chỉ trả về tabs có canAccept=true và status=free
         """
         if not self.websocket:
             return []
@@ -377,7 +383,13 @@ class PortManager:
             response = await asyncio.wait_for(future, timeout=timeout)
             tabs = response.get('tabs', [])
             
-            return tabs
+            # 🔥 CRITICAL FIX: Chỉ trả tabs THỰC SỰ rảnh (canAccept=true và status=free)
+            free_tabs = [
+                tab for tab in tabs 
+                if tab.get('canAccept', False) and tab.get('status') == 'free'
+            ]
+            
+            return free_tabs
             
         except asyncio.TimeoutError:
             return []

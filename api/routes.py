@@ -366,12 +366,13 @@ def setup_routes(app, port_manager):
             if not available_tabs or len(available_tabs) == 0:
                 return error_response(
                     error_message="No available tabs for new task",
-                    detail_message="Không có tab DeepSeek nào khả dụng. Vui lòng mở ít nhất 1 tab DeepSeek trong ZenTab extension.",
+                    detail_message="Không có tab DeepSeek nào khả dụng hoặc tất cả tabs đang busy. Vui lòng đợi hoặc mở thêm tab DeepSeek.",
                     metadata={"is_new_task": True, "available_tabs_count": 0},
                     status_code=503,
                     show_traceback=False
                 )
             
+            # 🔥 FIX: Double-check canAccept để chắc chắn tab thực sự rảnh
             selected_tab = available_tabs[0]
         else:
             if not folder_path:
@@ -388,12 +389,13 @@ def setup_routes(app, port_manager):
             if not folder_tabs or len(folder_tabs) == 0:
                 return error_response(
                     error_message=f"No tabs linked to folder: {folder_path}",
-                    detail_message=f"Không có tab nào được liên kết với folder '{folder_path}'. Vui lòng bắt đầu một task mới trước.",
+                    detail_message=f"Không có tab nào rảnh được liên kết với folder '{folder_path}'. Các tab có thể đang busy hoặc chưa được link.",
                     metadata={"folder_path": folder_path, "is_new_task": False},
                     status_code=503,
                     show_traceback=False
                 )
             
+            # 🔥 FIX: Double-check canAccept để chắc chắn tab thực sự rảnh
             selected_tab = folder_tabs[0]
         
         tab_id = selected_tab.get('tabId')
@@ -488,6 +490,11 @@ def setup_routes(app, port_manager):
         }
         
         if is_new_task and folder_path:
+            ws_message["folderPath"] = folder_path
+        
+        # 🔥 CRITICAL FIX: Gửi folderPath cho MỌI request (không chỉ new task)
+        # Extension CẦN folderPath để accumulate tokens
+        if folder_path:
             ws_message["folderPath"] = folder_path
         
         # 🆕 Thêm images vào message nếu có
