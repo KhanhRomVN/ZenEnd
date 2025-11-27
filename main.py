@@ -54,26 +54,67 @@ from fastapi.responses import JSONResponse
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
+    """
+    Handle Pydantic validation errors
+    🔥 CRITICAL: Log chi tiết và trả về error response thân thiện
+    """
+    from core import error as log_error
+    
     errors = exc.errors()
+    
+    # Log validation error
+    log_error(
+        "Request validation failed",
+        {
+            "path": request.url.path,
+            "method": request.method,
+            "error_count": len(errors),
+            "errors": str(errors)[:200]  # Truncate for log
+        },
+        show_traceback=False
+    )
+    
+    # Return user-friendly error
     return JSONResponse(
         status_code=422,
         content={
             "detail": errors,
-            "message": "Validation failed - check request format"
+            "message": "Yêu cầu không hợp lệ - kiểm tra lại format của request body",
+            "hint": "Đảm bảo các field bắt buộc (model, messages) có mặt và đúng type"
         }
     )
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request, exc):
+    """
+    Handle tất cả các exception chưa được xử lý
+    🔥 CRITICAL: Last line of defense - log mọi exception
+    """
+    from core import critical as log_critical
     import traceback
-    traceback.print_exc()
+    
+    # Log exception với full traceback
+    tb = traceback.format_exc()
+    log_critical(
+        f"Unhandled exception: {str(exc)}",
+        {
+            "path": request.url.path,
+            "method": request.method,
+            "exception_type": type(exc).__name__,
+            "traceback": tb[:500]  # Truncate for metadata
+        },
+        show_traceback=True
+    )
+    
+    # Return generic error response
     return JSONResponse(
         status_code=500,
         content={
             "error": {
                 "message": str(exc),
                 "type": "internal_server_error",
-                "code": "internal_error"
+                "code": "internal_error",
+                "hint": "Lỗi máy chủ nội bộ. Vui lòng kiểm tra log để biết chi tiết."
             }
         }
     )

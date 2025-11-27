@@ -215,11 +215,7 @@ class PortManager:
             timeout: Thời gian tối đa chờ (giây)
             
         Returns:
-            dict: Response data từ ZenTab
-            
-        Raises:
-            asyncio.TimeoutError: Nếu quá timeout chưa nhận được response
-            HTTPException: Nếu response chứa error
+            dict: Response data từ ZenTab hoặc dict chứa error field
         """
         # Tạo future để chờ response
         future = asyncio.Future()
@@ -229,17 +225,28 @@ class PortManager:
             # Đợi response với timeout
             response = await asyncio.wait_for(future, timeout=timeout)
             
+            # 🔥 FIX: KHÔNG raise HTTPException - chỉ return dict với error
             # Kiểm tra response có lỗi không
             if "error" in response:
-                from fastapi import HTTPException
-                error_msg = response["error"]
+                error_msg = response.get("error", "Unknown error")
                 
-                # Xử lý các loại lỗi khác nhau
+                # Classify error type
                 if "cooling down" in error_msg.lower() or "not ready" in error_msg.lower():
-                    raise HTTPException(status_code=503, detail=error_msg)
+                    error_type = "COOLING_DOWN"
+                    status_hint = 503
                 else:
-                    raise HTTPException(status_code=500, detail=error_msg)
+                    error_type = "TAB_ERROR"
+                    status_hint = 500
+                
+                # Return error dict thay vì raise
+                return {
+                    "error": error_msg,
+                    "error_type": error_type,
+                    "status_hint": status_hint,
+                    "request_id": request_id
+                }
             
+            # Return success response
             return response
             
         except asyncio.TimeoutError:
@@ -247,18 +254,36 @@ class PortManager:
             self.response_futures.pop(request_id, None)
             self.request_to_tab.pop(request_id, None)
             
-            # 🔥 FIX: Trả về dict error thay vì StreamingResponse
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=504,
-                detail=f"Request đã timeout sau {timeout} giây. DeepSeek mất quá nhiều thời gian để phản hồi."
-            )
+            # Return timeout error dict
+            return {
+                "error": f"Request đã timeout sau {timeout} giây. DeepSeek mất quá nhiều thời gian để phản hồi.",
+                "error_type": "TIMEOUT",
+                "timeout_seconds": timeout,
+                "status_hint": 504,
+                "request_id": request_id
+            }
             
         except Exception as e:
             # Cleanup khi có lỗi
             self.response_futures.pop(request_id, None)
             self.request_to_tab.pop(request_id, None)
-            raise
+            
+            # Log exception với traceback
+            import traceback
+            tb = traceback.format_exc()
+            
+            # 🔥 FIX: Đảm bảo error message KHÔNG BAO GIỜ rỗng
+            error_message = str(e) if str(e) else f"Unknown exception: {type(e).__name__}"
+            
+            # Return exception error dict
+            return {
+                "error": f"Exception trong wait_for_response: {error_message}",
+                "error_type": "EXCEPTION",
+                "exception_class": type(e).__name__,
+                "traceback_preview": tb[:500],  # Truncate for safety
+                "status_hint": 500,
+                "request_id": request_id
+            }
             
         finally:
             # Luôn cleanup future sau khi xong

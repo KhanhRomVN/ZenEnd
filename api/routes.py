@@ -14,37 +14,77 @@ def _extract_images_from_messages(messages: list) -> list[dict]:
     """
     Extract tất cả images từ messages.
     Trả về list các image objects với format: {type, data, format}
+    🔥 CRITICAL: Wrapped trong try-catch để không crash nếu có lỗi
     """
     images = []
     
-    for msg in messages:
-        content = msg.content
+    try:
+        if not messages or not isinstance(messages, list):
+            return images
         
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict):
-                    if item.get("type") == "image_url":
-                        image_url_data = item.get("image_url", {})
-                        
-                        if isinstance(image_url_data, dict):
-                            url = image_url_data.get("url", "")
-                        elif isinstance(image_url_data, str):
-                            url = image_url_data
-                        else:
+        for msg_idx, msg in enumerate(messages):
+            try:
+                # Validate msg structure
+                if not hasattr(msg, 'content'):
+                    continue
+                
+                content = msg.content
+                
+                if isinstance(content, list):
+                    for item_idx, item in enumerate(content):
+                        try:
+                            if isinstance(item, dict):
+                                if item.get("type") == "image_url":
+                                    image_url_data = item.get("image_url", {})
+                                    
+                                    if isinstance(image_url_data, dict):
+                                        url = image_url_data.get("url", "")
+                                    elif isinstance(image_url_data, str):
+                                        url = image_url_data
+                                    else:
+                                        continue
+                                    
+                                    if url.startswith("data:image"):
+                                        import re
+                                        match = re.match(r'data:image/([a-zA-Z]+);base64,(.+)', url)
+                                        if match:
+                                            image_format = match.group(1)
+                                            base64_data = match.group(2)
+                                            
+                                            # Validate base64 data (basic check)
+                                            if base64_data and len(base64_data) > 0:
+                                                images.append({
+                                                    "type": "image_url",
+                                                    "format": image_format,
+                                                    "data": base64_data
+                                                })
+                        except Exception as item_error:
+                            # Log item error nhưng không crash
+                            from core import warning
+                            warning(
+                                f"Failed to process image item {item_idx} in message {msg_idx}",
+                                {"error": str(item_error), "error_type": type(item_error).__name__}
+                            )
                             continue
-                        
-                        if url.startswith("data:image"):
-                            import re
-                            match = re.match(r'data:image/([a-zA-Z]+);base64,(.+)', url)
-                            if match:
-                                image_format = match.group(1)
-                                base64_data = match.group(2)
-                                
-                                images.append({
-                                    "type": "image_url",
-                                    "format": image_format,
-                                    "data": base64_data
-                                })
+                            
+            except Exception as msg_error:
+                # Log message error nhưng không crash
+                from core import warning
+                warning(
+                    f"Failed to process message {msg_idx}",
+                    {"error": str(msg_error), "error_type": type(msg_error).__name__}
+                )
+                continue
+        
+    except Exception as e:
+        # Log top-level error nhưng trả về empty list thay vì crash
+        from core import error
+        error(
+            f"Critical error in _extract_images_from_messages",
+            {"error": str(e), "error_type": type(e).__name__},
+            show_traceback=True
+        )
+        return []
     
     return images
 
@@ -52,163 +92,273 @@ def _extract_folder_path(messages: list) -> str | None:
     """
     Extract folder_path từ system/user messages.
     Tìm pattern: # Current Working Directory (/path/to/folder)
+    🔥 CRITICAL: Wrapped trong try-catch để không crash
     """
-    for msg in messages:
-        content = msg.content
-        if isinstance(content, str):
-            match = re.search(
-                r'# Current Working Directory \(([^)]+)\)',
-                content
-            )
-            if match:
-                folder_path = match.group(1)
-                return folder_path
-        elif isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text", "")
+    try:
+        if not messages or not isinstance(messages, list):
+            return None
+        
+        for msg in messages:
+            try:
+                if not hasattr(msg, 'content'):
+                    continue
+                
+                content = msg.content
+                
+                if isinstance(content, str):
                     match = re.search(
                         r'# Current Working Directory \(([^)]+)\)',
-                        text
+                        content
                     )
                     if match:
                         folder_path = match.group(1)
-                        return folder_path
+                        # Validate folder_path is not empty
+                        if folder_path and folder_path.strip():
+                            return folder_path.strip()
+                            
+                elif isinstance(content, list):
+                    for item in content:
+                        try:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                text = item.get("text", "")
+                                if text:
+                                    match = re.search(
+                                        r'# Current Working Directory \(([^)]+)\)',
+                                        text
+                                    )
+                                    if match:
+                                        folder_path = match.group(1)
+                                        if folder_path and folder_path.strip():
+                                            return folder_path.strip()
+                        except Exception:
+                            continue
+                            
+            except Exception:
+                continue
+                
+    except Exception as e:
+        from core import warning
+        warning(
+            f"Error in _extract_folder_path",
+            {"error": str(e), "error_type": type(e).__name__}
+        )
+        return None
+    
     return None
 
 def _detect_new_task(messages: list) -> bool:
     """
     Kiểm tra xem có <task></task> KHÔNG RỖNG trong MESSAGE CUỐI CÙNG không.
     Trả về True nếu đây là task mới (có nội dung task).
+    🔥 CRITICAL: Wrapped trong try-catch, default False nếu có lỗi
     """
-    if not messages:
-        return False
-    
-    latest_msg = messages[-1]
-    content = latest_msg.content
-    
-    msg_role = latest_msg.role
-    
-    if isinstance(content, str):
-        has_task_tag = '<task>' in content and '</task>' in content
-        if has_task_tag:
-            task_start_idx = content.find('<task>') + 6
-            task_end_idx = content.find('</task>')
-            task_content = content[task_start_idx:task_end_idx].strip()
-            
-            if len(task_content) == 0:
-                return False
-            
-            return True
-        else:
+    try:
+        if not messages or not isinstance(messages, list) or len(messages) == 0:
             return False
-    elif isinstance(content, list):
-        for idx, item in enumerate(content):
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = item.get("text", "")
-                has_task_tag = '<task>' in text and '</task>' in text
-                if has_task_tag:
-                    task_start_idx = text.find('<task>') + 6
-                    task_end_idx = text.find('</task>')
-                    task_content = text[task_start_idx:task_end_idx].strip()
+        
+        latest_msg = messages[-1]
+        
+        if not hasattr(latest_msg, 'content'):
+            return False
+        
+        content = latest_msg.content
+        
+        if isinstance(content, str):
+            has_task_tag = '<task>' in content and '</task>' in content
+            if has_task_tag:
+                try:
+                    task_start_idx = content.find('<task>') + 6
+                    task_end_idx = content.find('</task>')
+                    
+                    # Validate indices
+                    if task_end_idx <= task_start_idx:
+                        return False
+                    
+                    task_content = content[task_start_idx:task_end_idx].strip()
                     
                     if len(task_content) == 0:
                         return False
                     
                     return True
-        return False
-    else:
+                except Exception:
+                    return False
+            else:
+                return False
+                
+        elif isinstance(content, list):
+            for idx, item in enumerate(content):
+                try:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text = item.get("text", "")
+                        if not text:
+                            continue
+                        
+                        has_task_tag = '<task>' in text and '</task>' in text
+                        if has_task_tag:
+                            task_start_idx = text.find('<task>') + 6
+                            task_end_idx = text.find('</task>')
+                            
+                            # Validate indices
+                            if task_end_idx <= task_start_idx:
+                                continue
+                            
+                            task_content = text[task_start_idx:task_end_idx].strip()
+                            
+                            if len(task_content) == 0:
+                                continue
+                            
+                            return True
+                except Exception:
+                    continue
+                    
+            return False
+        else:
+            return False
+            
+    except Exception as e:
+        from core import warning
+        warning(
+            f"Error in _detect_new_task",
+            {"error": str(e), "error_type": type(e).__name__}
+        )
         return False
 
 def _validate_and_fix_response(response: dict, request_id: str, is_fake: bool = False) -> dict:
     """
     Rebuild response từ ZenTab thành clean OpenAI completion format.
     Extract từng field và tạo lại object mới thay vì parse phức tạp.
+    🔥 CRITICAL: Bọc toàn bộ logic trong try-catch để tránh crash
     """
-    if not isinstance(response, dict):
-        return error_response(
-            error_message="Invalid response format from ZenTab",
-            detail_message="Response từ ZenTab không đúng format (không phải dict). Có thể ZenTab extension gặp lỗi.",
-            metadata={"response_type": type(response).__name__},
-            status_code=500,
-            show_traceback=False
-        )
-    
-    response_id = response.get('id', f'chatcmpl-{request_id}')
-    object_type = response.get('object', 'chat.completion.chunk')
-    created = response.get('created', int(time.time()))
-    model = response.get('model', 'deepseek-chat')
-    system_fingerprint = response.get('system_fingerprint', f'fp_{uuid.uuid4().hex[:8]}')
-    
-    original_choices = response.get('choices', [])
-    if not original_choices or len(original_choices) == 0:
-        return error_response(
-            error_message="Invalid response: no choices",
-            detail_message="Response từ ZenTab thiếu field 'choices'. Format response không hợp lệ.",
-            metadata={"has_choices": bool(original_choices)},
-            status_code=500,
-            show_traceback=False
-        )
-    
-    original_choice = original_choices[0]
-    choice_index = original_choice.get('index', 0)
-    finish_reason = original_choice.get('finish_reason', 'stop')
-    logprobs = original_choice.get('logprobs', None)
-    
-    message_data = original_choice.get('message') or original_choice.get('delta', {})
-    role = message_data.get('role', 'assistant')
-    raw_content = message_data.get('content', '')
-    tool_calls = message_data.get('tool_calls', None)
-    
-    content = raw_content
-    if isinstance(raw_content, str) and '\\n' in raw_content:
-        content = raw_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
-    
-    original_usage = response.get('usage', {})
-    prompt_tokens = original_usage.get('prompt_tokens', 0)
-    completion_tokens = original_usage.get('completion_tokens', 0)
-    total_tokens = original_usage.get('total_tokens', 0)
-    
-    if is_fake:
-        message_obj = {
-            'role': role,
-            'content': content
-        }
-        if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
-            message_obj['tool_calls'] = tool_calls
+    try:
+        if not isinstance(response, dict):
+            return error_response(
+                error_message="Invalid response format from ZenTab",
+                detail_message="Response từ ZenTab không đúng format (không phải dict). Có thể ZenTab extension gặp lỗi.",
+                metadata={"response_type": type(response).__name__},
+                status_code=500,
+                show_traceback=False
+            )
         
-        choice_data = {
-            'index': choice_index,
-            'message': message_obj,
-            'finish_reason': finish_reason,
-            'logprobs': logprobs
-        }
-    else:
-        choice_data = {
-            'index': choice_index,
-            'delta': {
+        response_id = response.get('id', f'chatcmpl-{request_id}')
+        object_type = response.get('object', 'chat.completion.chunk')
+        created = response.get('created', int(time.time()))
+        model = response.get('model', 'deepseek-chat')
+        system_fingerprint = response.get('system_fingerprint', f'fp_{uuid.uuid4().hex[:8]}')
+        
+        original_choices = response.get('choices', [])
+        if not original_choices or len(original_choices) == 0:
+            return error_response(
+                error_message="Invalid response: no choices",
+                detail_message="Response từ ZenTab thiếu field 'choices'. Format response không hợp lệ.",
+                metadata={"has_choices": bool(original_choices)},
+                status_code=500,
+                show_traceback=False
+            )
+        
+        original_choice = original_choices[0]
+        
+        # 🔥 CRITICAL: Validate original_choice là dict
+        if not isinstance(original_choice, dict):
+            return error_response(
+                error_message="Invalid choice format",
+                detail_message=f"Choice[0] không đúng format (type: {type(original_choice).__name__}). Expected dict.",
+                metadata={"choice_type": type(original_choice).__name__},
+                status_code=500,
+                show_traceback=False
+            )
+        
+        choice_index = original_choice.get('index', 0)
+        finish_reason = original_choice.get('finish_reason', 'stop')
+        logprobs = original_choice.get('logprobs', None)
+        
+        message_data = original_choice.get('message') or original_choice.get('delta', {})
+        
+        # 🔥 CRITICAL: Validate message_data là dict
+        if not isinstance(message_data, dict):
+            message_data = {}
+        
+        role = message_data.get('role', 'assistant')
+        raw_content = message_data.get('content', '')
+        tool_calls = message_data.get('tool_calls', None)
+        
+        # 🔥 CRITICAL: Ensure content is always string
+        if raw_content is None:
+            content = ""
+        elif isinstance(raw_content, str):
+            if '\\n' in raw_content:
+                content = raw_content.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+            else:
+                content = raw_content
+        else:
+            content = str(raw_content)
+        
+        original_usage = response.get('usage', {})
+        
+        # 🔥 CRITICAL: Validate usage is dict
+        if not isinstance(original_usage, dict):
+            original_usage = {}
+        
+        prompt_tokens = original_usage.get('prompt_tokens', 0)
+        completion_tokens = original_usage.get('completion_tokens', 0)
+        total_tokens = original_usage.get('total_tokens', 0)
+        
+        if is_fake:
+            message_obj = {
                 'role': role,
                 'content': content
+            }
+            if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
+                message_obj['tool_calls'] = tool_calls
+            
+            choice_data = {
+                'index': choice_index,
+                'message': message_obj,
+                'finish_reason': finish_reason,
+                'logprobs': logprobs
+            }
+        else:
+            choice_data = {
+                'index': choice_index,
+                'delta': {
+                    'role': role,
+                    'content': content
+                },
+                'finish_reason': finish_reason,
+                'logprobs': logprobs
+            }
+        
+        clean_response = {
+            'id': response_id,
+            'object': object_type,
+            'created': created,
+            'model': model,
+            'choices': [choice_data],
+            'usage': {
+                'prompt_tokens': prompt_tokens,
+                'completion_tokens': completion_tokens,
+                'total_tokens': total_tokens
             },
-            'finish_reason': finish_reason,
-            'logprobs': logprobs
+            'system_fingerprint': system_fingerprint
         }
+        
+        return clean_response
     
-    clean_response = {
-        'id': response_id,
-        'object': object_type,
-        'created': created,
-        'model': model,
-        'choices': [choice_data],
-        'usage': {
-            'prompt_tokens': prompt_tokens,
-            'completion_tokens': completion_tokens,
-            'total_tokens': total_tokens
-        },
-        'system_fingerprint': system_fingerprint
-    }
-    
-    return clean_response
+    except Exception as e:
+        # 🔥 CRITICAL: Catch mọi exception trong quá trình rebuild
+        import traceback
+        traceback.print_exc()
+        
+        return error_response(
+            error_message=f"Exception while validating response: {str(e)}",
+            detail_message=f"Lỗi không mong muốn khi xử lý response từ ZenTab: {str(e)}. Response có thể bị corrupt hoặc format không hợp lệ.",
+            metadata={
+                "exception_type": type(e).__name__,
+                "request_id": request_id,
+                "response_preview": str(response)[:200] if response else "None"
+            },
+            status_code=500,
+            show_traceback=True
+        )
 
 from config.settings import REQUEST_TIMEOUT, HTTP_PORT
 from models import ChatCompletionRequest
@@ -372,8 +522,21 @@ def setup_routes(app, port_manager):
                     show_traceback=False
                 )
             
-            # 🔥 FIX: Double-check canAccept để chắc chắn tab thực sự rảnh
-            selected_tab = available_tabs[0]
+            # 🔥 NEW: Ưu tiên tab KHÔNG có folder_path hoặc có folder_path TRÙNG
+            if folder_path:
+                matching_tabs = [t for t in available_tabs if t.get('folderPath') == folder_path or t.get('folderPath') is None]
+                if matching_tabs:
+                    selected_tab = matching_tabs[0]
+                else:
+                    selected_tab = available_tabs[0]
+                    from core import warning
+                    warning(
+                        f"No matching tabs for folder '{folder_path}', using first available tab",
+                        {"folder_path": folder_path, "selected_tab_id": selected_tab.get('tabId')}
+                    )
+            else:
+                no_folder_tabs = [t for t in available_tabs if t.get('folderPath') is None]
+                selected_tab = no_folder_tabs[0] if no_folder_tabs else available_tabs[0]
         else:
             if not folder_path:
                 return error_response(
@@ -409,21 +572,31 @@ def setup_routes(app, port_manager):
                 show_traceback=False
             )
         
-        # 🆕 EXTRACT IMAGES từ messages
-        images = _extract_images_from_messages(request.messages)
-        has_images = len(images) > 0
-        
-        if has_images:
-            from core import info
-            info(
-                f"📸 Extracted {len(images)} image(s) from request",
-                {
-                    "request_id": request_id,
-                    "tab_id": tab_id,
-                    "image_count": len(images),
-                    "image_formats": [img["format"] for img in images]
-                }
+        # 🆕 EXTRACT IMAGES từ messages với error handling
+        try:
+            images = _extract_images_from_messages(request.messages)
+            has_images = len(images) > 0
+            
+            if has_images:
+                from core import info
+                info(
+                    f"📸 Extracted {len(images)} image(s) from request",
+                    {
+                        "request_id": request_id,
+                        "tab_id": tab_id,
+                        "image_count": len(images),
+                        "image_formats": [img["format"] for img in images]
+                    }
+                )
+        except Exception as e:
+            # 🔥 CRITICAL: Nếu extract images fail, vẫn tiếp tục (images = [])
+            from core import warning
+            warning(
+                f"Failed to extract images from messages: {str(e)}",
+                {"request_id": request_id, "error_type": type(e).__name__}
             )
+            images = []
+            has_images = False
         
         tab_status = selected_tab.get('status', 'unknown')
         can_accept = selected_tab.get('canAccept', False)
@@ -480,6 +653,22 @@ def setup_routes(app, port_manager):
 
         port_manager.request_to_tab[request_id] = tab_id
         
+        # 🆕 LOG: Chi tiết về isNewTask decision
+        from core import info
+        info(
+            f"📤 Preparing to send prompt to tab {tab_id}",
+            {
+                "request_id": request_id,
+                "tab_id": tab_id,
+                "is_new_task": is_new_task,
+                "folder_path": folder_path or "None",
+                "tab_folder_path": selected_tab.get('folderPath') or "None",
+                "has_system_prompt": bool(system_prompt and system_prompt.strip()),
+                "user_prompt_length": len(user_prompt),
+                "system_prompt_length": len(system_prompt) if system_prompt else 0
+            }
+        )
+
         ws_message = {
             "type": "sendPrompt",
             "tabId": tab_id,
@@ -502,12 +691,52 @@ def setup_routes(app, port_manager):
             ws_message["images"] = images
         
         try:
-            # 🆕 LOG: WebSocket state - FIXED
-            if port_manager.websocket:
-                if hasattr(port_manager.websocket, 'client_state'):
-                    from starlette.websockets import WebSocketState
+            # 🔥 CRITICAL: Validate WebSocket state trước khi gửi
+            if not port_manager.websocket:
+                return error_response(
+                    error_message="WebSocket connection lost",
+                    detail_message="WebSocket đã bị disconnect trước khi gửi prompt. Vui lòng reconnect ZenTab extension.",
+                    metadata={"tab_id": tab_id, "request_id": request_id},
+                    status_code=503,
+                    show_traceback=False
+                )
             
-            await port_manager.websocket.send_text(json.dumps(ws_message))
+            # Check WebSocket state (FastAPI WebSocket)
+            if hasattr(port_manager.websocket, 'client_state'):
+                from starlette.websockets import WebSocketState
+                if port_manager.websocket.client_state != WebSocketState.CONNECTED:
+                    return error_response(
+                        error_message="WebSocket not in CONNECTED state",
+                        detail_message=f"WebSocket state: {port_manager.websocket.client_state}. Không thể gửi message.",
+                        metadata={"tab_id": tab_id, "request_id": request_id, "ws_state": str(port_manager.websocket.client_state)},
+                        status_code=503,
+                        show_traceback=False
+                    )
+            
+            # 🔥 CRITICAL: Validate ws_message structure
+            if not ws_message or not isinstance(ws_message, dict):
+                return error_response(
+                    error_message="Invalid WebSocket message structure",
+                    detail_message=f"WebSocket message không hợp lệ (type: {type(ws_message).__name__})",
+                    metadata={"tab_id": tab_id, "request_id": request_id, "ws_message_type": type(ws_message).__name__},
+                    status_code=500,
+                    show_traceback=False
+                )
+            
+            # Try to serialize ws_message to JSON (validation)
+            try:
+                json_str = json.dumps(ws_message)
+            except (TypeError, ValueError) as json_err:
+                return error_response(
+                    error_message="Failed to serialize WebSocket message to JSON",
+                    detail_message=f"Không thể chuyển ws_message sang JSON. Lỗi: {str(json_err)}",
+                    metadata={"tab_id": tab_id, "request_id": request_id, "json_error": str(json_err)},
+                    status_code=500,
+                    show_traceback=True
+                )
+            
+            # Send message
+            await port_manager.websocket.send_text(json_str)
             
         except Exception as e:
             import traceback
@@ -525,30 +754,64 @@ def setup_routes(app, port_manager):
         try:
             response = await port_manager.wait_for_response(request_id, REQUEST_TIMEOUT)
             
+            # 🔥 CRITICAL: Validate response structure trước khi xử lý
+            if not response or not isinstance(response, dict):
+                return error_response(
+                    error_message="Invalid response from wait_for_response",
+                    detail_message=f"Response không hợp lệ (type: {type(response).__name__}). Có thể ZenTab extension không phản hồi đúng format.",
+                    metadata={"tab_id": tab_id, "request_id": request_id, "response_type": type(response).__name__},
+                    status_code=500,
+                    show_traceback=False
+                )
+            
+            # 🆕 FIX: Xử lý error response với status_hint từ wait_for_response
             if "error" in response:
-                error_msg = response["error"]
-                if "cooling down" in error_msg.lower() or "not ready" in error_msg.lower():
-                    return error_response(
-                        error_message=f"Tab cooling down or not ready",
-                        detail_message=error_msg,
-                        metadata={"tab_id": tab_id, "request_id": request_id, "error_type": "cooling_down"},
-                        status_code=503,
-                        show_traceback=False
-                    )
-                else:
-                    return error_response(
-                        error_message=f"Error from tab response",
-                        detail_message=error_msg,
-                        metadata={"tab_id": tab_id, "request_id": request_id},
-                        status_code=500,
-                        show_traceback=False
-                    )
+                error_msg = response.get("error", "Unknown error")
+                error_type = response.get("error_type", "UNKNOWN")
+                status_hint = response.get("status_hint", 500)
+                
+                # Map error_type tới detail message phù hợp
+                detail_messages = {
+                    "TIMEOUT": f"Request timeout sau {response.get('timeout_seconds', 'N/A')} giây. Tab DeepSeek không phản hồi kịp thời.",
+                    "COOLING_DOWN": "Tab đang trong trạng thái cooling down hoặc chưa sẵn sàng nhận request mới.",
+                    "TAB_ERROR": "Tab gặp lỗi khi xử lý request.",
+                    "EXCEPTION": f"Lỗi nội bộ: {error_msg}"
+                }
+                
+                detail_message = detail_messages.get(error_type, error_msg)
+                
+                # Build metadata với thông tin đầy đủ
+                error_metadata = {
+                    "tab_id": tab_id,
+                    "request_id": request_id,
+                    "error_type": error_type
+                }
+                
+                # Thêm thông tin bổ sung nếu có
+                if "exception_class" in response:
+                    error_metadata["exception_class"] = response["exception_class"]
+                if "traceback_preview" in response:
+                    error_metadata["traceback_preview"] = response["traceback_preview"][:200]
+                
+                return error_response(
+                    error_message=f"Error from wait_for_response: {error_type}",
+                    detail_message=detail_message,
+                    metadata=error_metadata,
+                    status_code=status_hint,
+                    show_traceback=(error_type == "EXCEPTION")  # Chỉ show traceback cho EXCEPTION
+                )
             
             port_manager.mark_request_completed(request_id)
 
             asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=30.0))
             
+            # 🔥 CRITICAL: _validate_and_fix_response có thể return error_response
             response = _validate_and_fix_response(response, request_id, is_fake=False)
+            
+            # 🔥 CRITICAL: Check nếu _validate_and_fix_response trả về StreamingResponse (là error)
+            if isinstance(response, StreamingResponse):
+                # Đây là error response từ _validate_and_fix_response
+                return response
             
             # 🆕 Log response thành công trước khi gửi về Cline
             from core import info
@@ -579,44 +842,6 @@ def setup_routes(app, port_manager):
             else:
                 return response
             
-        except HTTPException as he:
-            port_manager.mark_request_processed(request_id)
-            
-            asyncio.create_task(port_manager.schedule_request_cleanup(request_id, delay=10.0))
-            
-            if he.status_code == 503:
-                return error_response(
-                    error_message="Service unavailable",
-                    detail_message=he.detail if hasattr(he, 'detail') else "Dịch vụ tạm thời không khả dụng. Vui lòng thử lại sau.",
-                    metadata={"tab_id": tab_id, "request_id": request_id, "status_code": 503},
-                    status_code=503,
-                    show_traceback=False
-                )
-
-            else:
-                fallback_response = {
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:16]}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": "deepseek-chat",
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": "I apologize, but I'm experiencing temporary technical difficulties. Please try your request again in a moment."
-                        },
-                        "finish_reason": "stop",
-                        "logprobs": None
-                    }],
-                    "usage": {
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                        "total_tokens": 0
-                    },
-                    "system_fingerprint": f"fp_{uuid.uuid4().hex[:8]}"
-                }
-                
-                return fallback_response
         except Exception as e:
             port_manager.mark_request_processed(request_id)
             
